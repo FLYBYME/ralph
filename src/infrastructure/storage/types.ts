@@ -1,0 +1,153 @@
+export type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'AWAITING_REVIEW';
+
+export type MessageIntent = 'COMMAND' | 'FEEDBACK' | 'APPROVAL' | 'STATUS_UPDATE' | 'ERROR';
+
+export enum FsmStep {
+  INVESTIGATE = 'INVESTIGATE',
+  PLAN = 'PLAN',
+  EXECUTE = 'EXECUTE',
+  VERIFY = 'VERIFY',
+  AWAITING_REVIEW = 'AWAITING_REVIEW'
+}
+
+export interface InvestigationContext {
+  discoveredFiles: string[];
+  searchQueriesRun: string[];
+  architecturalSummary: string;
+  notes?: string;
+}
+
+export interface ActionableStep {
+  id: string;
+  description: string;
+}
+
+export interface PlanningContext {
+  proposedSteps: ActionableStep[];
+  targetFiles: string[];
+  requiredTools: string[];
+  planSummary?: string;
+}
+
+export interface ExecutionContext {
+  activeWorkerId: string;
+  attemptCount: number;
+  lastErrorLog: string | null;
+  geminiPrompt?: string;
+  selectedWorker?: 'gemini' | 'copilot' | 'opencode';
+  specialistOutput?: string;
+}
+
+export interface VerificationContext {
+  commandsRun: string[];
+  testOutput: string;
+  lintPassed: boolean;
+}
+
+export interface ContextStackItem {
+  ref: string;
+  summary: string;
+}
+
+export interface StateContext {
+  currentStep: FsmStep;
+  investigation: InvestigationContext;
+  planning: PlanningContext;
+  execution: ExecutionContext;
+  verification: VerificationContext;
+  contextStack?: ContextStackItem[];
+}
+
+export interface WorkspaceState {
+  [key: string]: unknown;
+}
+
+export interface ProjectRecord {
+  [key: string]: string | boolean | string[] | undefined;
+  id: string;
+  name: string;
+  absolutePath: string; // The path on disk (either local or inside workspaces)
+  sourceUrl?: string | undefined; // Optional: Git URL if cloned
+  isLocalOnly: boolean; // True if just mapped to a local directory, false if cloned
+  ciCommands: string[]; // List of commands to run in the Docker container during VERIFY
+  defaultBranch: string;
+  ignoredPaths: string[];
+  lastScannedAt: string;
+}
+
+export interface TaskSummary {
+  [key: string]: string | boolean | string[] | undefined;
+  id: string;
+  projectId: string;
+  status: TaskStatus;
+  title: string;
+  urgent: boolean;
+  humanInputReceived: boolean;
+  resumeAfter?: string | undefined; // ISO timestamp
+  labels: string[];
+  assignees: string[];
+  milestone?: string | undefined;
+}
+
+export interface AppSettings {
+  agentMention: string;
+  ollamaHost: string;
+  ollamaModel: string;
+  serverPort: number;
+  workerGeminiEnabled: boolean;
+  workerGeminiModel: string;
+  workerCopilotEnabled: boolean;
+  workerCopilotModel: string;
+  workerOpencodeEnabled: boolean;
+  workerOpencodeModel: string;
+  maxBacklog: number;
+  maxIterations: number;
+}
+
+export interface LocalLedger {
+  schemaVersion: number;
+  projects: ProjectRecord[];
+  tasks: TaskSummary[];
+  settings: AppSettings;
+}
+
+export interface TaskObjective {
+  title: string;
+  originalPrompt: string;
+  successCriteria: string[];
+}
+
+export interface ChatMessage {
+  id: string;
+  author: 'HUMAN' | 'RALPH' | 'SYSTEM';
+  intent: MessageIntent;
+  body: string;
+  timestamp: string;
+}
+
+export interface TaskThread {
+  messages: ChatMessage[];
+}
+
+export interface TaskRecord {
+  id: string;
+  projectId: string;
+  status: TaskStatus;
+  objective: TaskObjective;
+  context: StateContext;
+  thread: TaskThread;
+  workspace: WorkspaceState;
+  createdAt: string;
+  updatedAt: string;
+  labels: string[];
+  assignees: string[];
+  milestone?: string | undefined;
+}
+
+export interface AuditLogEntry {
+  timestamp: string;
+  transitionFrom: string;
+  transitionTo: string;
+  triggerEvent: string;
+  reasoning: string;
+}

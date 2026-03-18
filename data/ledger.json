@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "projects": [
+    {
+      "id": "df9d5235-0bc5-46f0-b2fe-640294a91a92",
+      "name": "test/playground",
+      "absolutePath": "/home/ubuntu/code/ralph/playground",
+      "defaultBranch": "main",
+      "ignoredPaths": [
+        "node_modules",
+        ".git",
+        "dist"
+      ],
+      "lastScannedAt": "2026-03-18T20:21:44.648Z",
+      "isLocalOnly": true,
+      "ciCommands": []
+    }
+  ],
+  "tasks": [
+    {
+      "id": "d6443da2-0e2f-4912-9d25-92d2d8686159",
+      "projectId": "df9d5235-0bc5-46f0-b2fe-640294a91a92",
+      "status": "AWAITING_REVIEW",
+      "title": "Add documentation",
+      "urgent": false,
+      "humanInputReceived": false
+    }
+  ],
+  "settings": {
+    "agentMention": "ralph",
+    "ollamaHost": "http://192.168.1.6:11434",
+    "ollamaModel": "qwen3:4b-instruct",
+    "serverPort": 3000,
+    "workerGeminiEnabled": true,
+    "workerGeminiModel": "",
+    "workerCopilotEnabled": false,
+    "workerCopilotModel": "",
+    "workerOpencodeEnabled": false,
+    "workerOpencodeModel": "",
+    "maxBacklog": 200,
+    "maxIterations": 20
+  }
+}

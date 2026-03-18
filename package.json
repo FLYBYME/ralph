@@ -1,0 +1,33 @@
+{
+  "name": "github-agent",
+  "version": "1.0.0",
+  "description": "AI-powered GitHub automation agent using Ollama and Octokit",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "ralph": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc --project tsconfig.json",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@types/blessed": "^0.1.27",
+    "blessed": "^0.1.81",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "dockerode": "^4.0.9",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ollama": "^0.5.12"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^4.0.1",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
