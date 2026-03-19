@@ -305,6 +305,51 @@ export function createToolRegistry(ctx: ToolContext): ToolRegistry {
     },
   });
 
+  // ── spawnSubAgent ────────────────────────────────────────────────────────
+  registry.set('spawnSubAgent', {
+    ollamaTool: makeTool(
+      'spawnSubAgent',
+      'Spawn a specialized background agent to perform a specific sub-task (e.g. summarize a file, research a bug).',
+      {
+        role:          { type: 'string', description: 'The role of the sub-agent (e.g. "summarizer", "tester", "researcher")' },
+        instruction:   { type: 'string', description: 'The specific instruction for the sub-agent' },
+        context_files: { type: 'string', description: 'Comma-separated list of file paths to provide for context' },
+      },
+      ['role', 'instruction']
+    ),
+    execute: async (params): Promise<ToolResult> => {
+      const role         = str(params, 'role').trim();
+      const instruction  = str(params, 'instruction').trim();
+      const contextPaths = str(params, 'context_files').split(',').map((f) => f.trim()).filter(Boolean);
+
+      if (!instruction) return { success: false, output: 'instruction is required' };
+
+      const contextFiles = [];
+      for (const filePath of contextPaths.slice(0, 10)) {
+          const absolutePath = path.resolve(ctx.repoPath, filePath);
+          if (await diskTooling.fileExists(absolutePath)) {
+              const content = await diskTooling.readFile(absolutePath);
+              contextFiles.push({ path: filePath, content: content.slice(0, 10000) });
+          }
+      }
+
+      const payload: Omit<WorkerPayload, 'model'> = {
+          systemPrompt: `You are a specialized sub-agent fulfilling the role of: ${role}. 
+Your goal is to provide a concise, expert answer or perform the requested analysis based strictly on the context provided.`,
+          userPrompt: instruction,
+          contextFiles,
+      };
+
+      try {
+          const settings = await ctx.storageEngine.getSettings();
+          const response = await ctx.workerManager.dispatch(payload, ctx.workerProvider, settings.ollamaModel);
+          return { success: true, output: response.rawText || "Sub-agent finished without output." };
+      } catch (error) {
+          return { success: false, output: `Sub-agent spawn failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    },
+  });
+
   // ── writeFile ────────────────────────────────────────────────────────────
   registry.set('writeFile', {
     ollamaTool: makeTool(

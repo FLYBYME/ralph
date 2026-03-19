@@ -30,40 +30,57 @@ export class PlanHandler implements IStepHandler {
     const selectedWorker = task.context.execution?.selectedWorker || 'gemini';
     const investigationNotes = task.context.investigation.notes || "No investigation notes.";
 
-    const systemPrompt = `You are "Ralph", a Lead AI Software Architect. Based on the investigation, generate a precise implementation plan payload for a senior specialist.
+    const systemPrompt = `You are "Ralph", a Lead AI Software Manager. Your objective is to decompose the main task into a discrete dependency graph of sub-tasks.
     
 ## Guidelines:
-- **Selected Worker**: Choose 'gemini' for general complex logic, 'copilot' for boilerplate, and 'opencode' for shell tasks.
-${lockedSpecialists.length > 0 ? `- **UNAVAILABLE WORKERS**: Do NOT choose ${lockedSpecialists.join(', ')} as they are currently out of quota.` : ''}
-- **Instructions**: Be extremely specific. Include exact function names to modify or create.
-- **Files**: Maximum 6 files.`;
+- **Root Cause Analysis**: Explain *why* you are choosing this approach.
+- **Sub-Tasks**: Break the work into independent units of work.
+- **Specialists**: Choose 'gemini' for complex logic/state, 'copilot' for boilerplate/tests, and 'opencode' for shell/cleanup.
+${lockedSpecialists.length > 0 ? `- **UNAVAILABLE WORKERS**: Do NOT use ${lockedSpecialists.join(', ')} as they are out of quota.` : ''}
+- **Dependencies**: Use 'depends_on' to ensure task_2 only starts after task_1 fixes the core bug.
+- **Target Files**: Be specific about which files each sub-task touches (max 3 per sub-task).`;
 
-    const userPrompt = `## Task
+    const userPrompt = `## Main Objective
 **${task.objective.title}**
 ${task.objective.originalPrompt || '(no description)'}
 
-## Investigation Notes
+## Investigation Findings
 ${investigationNotes}
 
 Respond with a JSON object in this format:
 {
   "root_cause_analysis": "string",
-  "selected_worker": "gemini" | "copilot" | "opencode",
-  "instructions": "string",
-  "test_plan": "string",
-  "exact_files_to_include": ["string"]
+  "sub_tasks": [
+    {
+      "id": "task_1",
+      "worker": "gemini" | "copilot" | "opencode",
+      "instructions": "string",
+      "target_files": ["string"],
+      "depends_on": []
+    }
+  ]
 }`;
 
     const schema = {
         type: "object",
         properties: {
             root_cause_analysis: { type: "string" },
-            selected_worker: { type: "string", enum: ["gemini", "copilot", "opencode"] },
-            instructions: { type: "string" },
-            test_plan: { type: "string" },
-            exact_files_to_include: { type: "array", items: { type: "string" } }
+            sub_tasks: {
+                type: "array",
+                items: {
+                    type: "object",
+                    properties: {
+                        id: { type: "string" },
+                        worker: { type: "string", enum: ["gemini", "copilot", "opencode"] },
+                        instructions: { type: "string" },
+                        target_files: { type: "array", items: { type: "string" } },
+                        depends_on: { type: "array", items: { type: "string" } }
+                    },
+                    required: ["id", "worker", "instructions", "target_files", "depends_on"]
+                }
+            }
         },
-        required: ["selected_worker", "instructions", "exact_files_to_include"]
+        required: ["root_cause_analysis", "sub_tasks"]
     };
 
     const payload: Omit<WorkerPayload, 'model'> = {
@@ -81,27 +98,42 @@ Respond with a JSON object in this format:
     let plan: any = null;
     try {
         if (response.rawText) {
-            plan = JSON.parse(response.rawText);
+            const clean = response.rawText.replace(/```json\n|```/g, '').trim();
+            plan = JSON.parse(clean);
         }
     } catch (e) {
-        console.warn("[PlanHandler] Failed to parse plan JSON.", e);
-        // Fallback to basic plan if JSON fails
-        plan = { selected_worker: selectedWorker, instructions: investigationNotes, exact_files_to_include: [] };
+        console.warn("[PlanHandler] Failed to parse plan JSON. Falling back.", e);
+        plan = { 
+            root_cause_analysis: "Plan generation failed. Defaulting to monolithic execution.", 
+            sub_tasks: [{
+                id: "task_0",
+                worker: selectedWorker,
+                instructions: investigationNotes,
+                target_files: [],
+                depends_on: []
+            }]
+        };
     }
 
     return {
       status: StepStatus.SUCCESS,
       stateUpdates: {
         planning: {
-          proposedSteps: [], // Could be expanded from plan.instructions
-          targetFiles: plan.exact_files_to_include || [],
-          requiredTools: [],
-          planSummary: plan.root_cause_analysis || "Plan generated."
+          rootCauseAnalysis: plan.root_cause_analysis,
+          subTasks: plan.sub_tasks.map((t: any) => ({
+              ...t,
+              targetFiles: t.target_files,
+              dependsOn: t.depends_on,
+              status: 'OPEN'
+          })),
+          proposedSteps: [], 
+          targetFiles: Array.from(new Set(plan.sub_tasks.flatMap((t: any) => t.target_files))),
+          requiredTools: []
         },
         execution: {
             ...task.context.execution,
-            geminiPrompt: plan.instructions,
-            selectedWorker: plan.selected_worker || selectedWorker
+            geminiPrompt: plan.sub_tasks[0]?.instructions || investigationNotes,
+            selectedWorker: plan.sub_tasks[0]?.worker || selectedWorker
         }
       },
       humanMessage: "Ralph has created a strategy and is waiting for your approval.",

@@ -23,129 +23,154 @@ export class ExecuteHandler implements IStepHandler {
   }
 
   public async execute(task: TaskRecord, project: ProjectRecord, storageEngine: LedgerStorageEngine): Promise<StepResult> {
-    const settings = await storageEngine.getSettings();
-    let specialist: WorkerSpecialist = task.context.execution.selectedWorker || 'gemini';
-    const instructions = task.context.execution.geminiPrompt || task.objective.title;
+    const planning = task.context.planning;
+    const subTasks = planning.subTasks || [];
 
-    // Check for existing locks
+    if (subTasks.length === 0) {
+        // Fallback or early exit if no subtasks
+        return {
+            status: StepStatus.SUCCESS,
+            stateUpdates: {},
+            humanMessage: "No sub-tasks defined. Skipping execution.",
+            nextStepOverride: null
+        };
+    }
+
+    // Identify next available tasks (dependencies met and not completed)
+    const completedIds = subTasks.filter(t => t.status === 'COMPLETED').map(t => t.id);
+    const availableTasks = subTasks.filter(t => 
+        t.status !== 'COMPLETED' && 
+        t.dependsOn.every(depId => completedIds.includes(depId))
+    );
+
+    if (availableTasks.length === 0 && subTasks.some(t => t.status !== 'COMPLETED')) {
+        // We have unfinished tasks but none are available (deadlock or waiting)
+        const failedTasks = subTasks.filter(t => t.status === 'FAILED');
+        if (failedTasks.length > 0) {
+             return {
+                status: StepStatus.FAILED,
+                stateUpdates: {},
+                humanMessage: `Execution stalled. The following sub-tasks failed: ${failedTasks.map(t => t.id).join(', ')}`,
+                nextStepOverride: FsmStep.PLAN
+            };
+        }
+        
+        return {
+            status: StepStatus.FAILED,
+            stateUpdates: {},
+            humanMessage: "Execution stalled due to unmet dependencies or deadlock in the plan graph.",
+            nextStepOverride: FsmStep.PLAN
+        };
+    }
+
+    if (availableTasks.length === 0) {
+        // All tasks are completed!
+        return {
+            status: StepStatus.SUCCESS,
+            stateUpdates: {
+                execution: {
+                    ...task.context.execution,
+                    specialistOutput: subTasks.map(t => `### Task: ${t.id} [${t.worker}]\n${t.result}`).join('\n\n')
+                }
+            },
+            humanMessage: `🚀 **Swarm Execution Complete.** All ${subTasks.length} sub-tasks have been applied successfully.`,
+            nextStepOverride: null
+        };
+    }
+
+    // For now, let's process the first available task (sequential Foreman)
+    const currentTask = availableTasks[0]!;
+    let specialist: WorkerSpecialist = (currentTask.worker as WorkerSpecialist) || 'gemini';
+    const settings = await storageEngine.getSettings();
+
+    // Specialists Lock-out check
     const now = new Date().toISOString();
     const activeLocks = (settings.quotaLocks || []).filter(lock => lock.disabledUntil > now);
-    
     if (activeLocks.some(lock => lock.specialist === specialist)) {
-        console.log(`[ExecuteHandler] Specialist ${specialist} is currently locked out. Searching for alternative...`);
         const available: WorkerSpecialist[] = ['gemini', 'copilot', 'opencode'];
         const fallback = available.find(s => !activeLocks.some(lock => lock.specialist === s));
         if (fallback) {
-            console.log(`[ExecuteHandler] Falling back to ${fallback}.`);
+            console.log(`[ExecuteHandler] Specialist ${specialist} locked. Falling back to ${fallback} for sub-task ${currentTask.id}.`);
             specialist = fallback;
         } else {
-            return {
-                status: StepStatus.FATAL,
+             return {
+                status: StepStatus.YIELD,
                 stateUpdates: {},
-                humanMessage: "All specialist workers are currently locked out due to quota limits.",
-                nextStepOverride: null
+                humanMessage: `All specialists locked. Waiting to resume sub-task ${currentTask.id}.`,
+                nextStepOverride: FsmStep.EXECUTE
             };
         }
     }
 
-    console.log(`[ExecuteHandler] Dispatching work to ${specialist} (TaskId: ${task.id})...`);
+    console.log(`[ExecuteHandler] Foreman: Executing sub-task ${currentTask.id} using ${specialist}...`);
 
-    const prompt = `You are an expert engineer working in a local terminal.
-
-Your task is:
-${instructions}
+    const prompt = `You are a specialist sub-agent. Your role: ${specialist}.
+Task Objective: ${currentTask.instructions}
+Target Files: ${currentTask.targetFiles.join(', ')}
 
 ## Instructions
-- You have full access to the current directory.
-- Explore the files, understand the architecture, and modify the code directly on disk to complete the task.
-- Do not narrate your actions; simply perform the modifications and exit.
-- If you need to run commands (like tests or build), you can assume standard tools are available.
+- Explore and modify files using tools.
+- Do not narrate.
+- Exit once done.
 
 ## Output Format
-1. Start with a brief explanation of the changes you made and why.
-2. List the files you modified.
-
-Do NOT output the file contents in your response. The files should be modified on disk.`;
+Brief summary of changes made. Do NOT output files.`;
 
     const result = await this.specialistExecutor.execute(specialist, prompt, {
       cwd: project.absolutePath,
       taskId: task.id,
-      activity: `Implementing changes for task ${task.id}`
+      activity: `Foreman: Running sub-task ${currentTask.id} (${currentTask.instructions})`
+    });
+
+    // Update the record for this sub-task
+    const updatedSubTasks = subTasks.map(t => {
+        if (t.id === currentTask.id) {
+            return {
+                ...t,
+                status: result.success ? ('COMPLETED' as const) : ('FAILED' as const),
+                result: result.success ? result.output : result.stderr
+            };
+        }
+        return t;
     });
 
     if (!result.success) {
-      // Check for Gemini Quota Exhaustion
-      const quotaMatch = result.stderr.match(/QUOTA_EXHAUSTED[\s\S]*?reset after (\d+[hms]+(?:[0-9]+[hms]+)*)/i) || 
-                         result.stderr.match(/exhausted your capacity.*reset after (\d+[hms]+(?:[0-9]+[hms]+)*)/i);
-      
-      if (quotaMatch && quotaMatch[1]) {
-        const waitTimeStr = quotaMatch[1];
-        const hMatch = waitTimeStr.match(/(\d+)h/);
-        const mMatch = waitTimeStr.match(/(\d+)m/);
-        const sMatch = waitTimeStr.match(/(\d+)s/);
-        const hVal = hMatch ? parseInt(hMatch[1] || '0') : 0;
-        const mVal = mMatch ? parseInt(mMatch[1] || '0') : 0;
-        const sVal = sMatch ? parseInt(sMatch[1] || '0') : 0;
-        const ms = (hVal * 3600 + mVal * 60 + sVal + 60) * 1000;
-        const until = new Date(Date.now() + ms).toISOString();
-        const currentLocks = settings.quotaLocks || [];
+        // Quota check (reuse existing logic but adapted for Foreman yield)
+        if (result.stderr.includes('QUOTA_EXHAUSTED') || result.stderr.includes('Rate limit')) {
+             return {
+                status: StepStatus.YIELD,
+                stateUpdates: {
+                    planning: { ...planning, subTasks: updatedSubTasks }
+                },
+                humanMessage: `⚠️ Sub-task ${currentTask.id} hit a rate limit. Yielding control.`,
+                nextStepOverride: FsmStep.EXECUTE
+            };
+        }
 
-        await storageEngine.updateSettings({
-            quotaLocks: [...currentLocks.filter(l => l.specialist !== 'gemini'), { specialist: 'gemini', reason: 'Quota Exhausted', disabledUntil: until }]
-        });
-        
         return {
-          status: StepStatus.YIELD,
-          stateUpdates: { 
-              execution: { 
-                  ...task.context.execution, 
-                  lastErrorLog: `Quota exhausted. Lock set until ${until}` 
-              } 
-          },
-          humanMessage: `⚠️ **Rate Limit Hit:** ${specialist} quota exhausted. Persistent lock set until ${until}.`,
-          nextStepOverride: FsmStep.EXECUTE
+            status: StepStatus.FAILED,
+            stateUpdates: {
+                planning: { ...planning, subTasks: updatedSubTasks },
+                execution: { ...task.context.execution, lastErrorLog: result.stderr }
+            },
+            humanMessage: `❌ Sub-task ${currentTask.id} failed: ${result.stderr}`,
+            nextStepOverride: null // Let the sequential loop decide if it should retry or plan
         };
-      }
-
-      // Check for Copilot Quota
-      if (result.stderr.includes('You have no quota') || result.stderr.includes('402')) {
-          console.log(`[ExecuteHandler] Copilot quota hit. Locking until end of month.`);
-          const now = new Date();
-          const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
-          const currentLocks = settings.quotaLocks || [];
-          try {
-              await storageEngine.updateSettings({
-                quotaLocks: [...currentLocks.filter(l => l.specialist !== 'copilot'), { specialist: 'copilot', reason: 'Out of Quota (402)', disabledUntil: endOfMonth }]
-              });
-          } catch (e) {
-              console.error(`[ExecuteHandler] Failed to set Copilot quota lock: ${e}`);
-          }
-      }
-
-      return {
-        status: StepStatus.FAILED,
-        stateUpdates: { 
-            execution: { 
-                ...task.context.execution, 
-                lastErrorLog: result.stderr 
-            } 
-        },
-        humanMessage: `${specialist} failed: ${result.stderr}`,
-        nextStepOverride: FsmStep.PLAN
-      };
     }
 
+    // Success for this sub-task - loop back to EXECUTE to pick the next one
     return {
-      status: StepStatus.SUCCESS,
-      stateUpdates: { 
-          execution: { 
-              ...task.context.execution, 
-              activeWorkerId: specialist,
-              specialistOutput: result.output
-          } 
-      },
-      humanMessage: `Ralph has applied the code changes using ${specialist}.\n\nNotes:\n${result.output.slice(0, 1000)}`,
-      nextStepOverride: null
+        status: StepStatus.YIELD, // Yield so we can update the ledger and pick the next task in the next tick
+        stateUpdates: {
+            planning: { ...planning, subTasks: updatedSubTasks },
+            execution: { 
+                ...task.context.execution, 
+                activeWorkerId: specialist,
+                specialistOutput: (task.context.execution.specialistOutput || '') + `\n\n### Task ${currentTask.id} Done.\n${result.output}`
+            }
+        },
+        humanMessage: `✅ Sub-task ${currentTask.id} complete. Foreman moving to next available task...`,
+        nextStepOverride: FsmStep.EXECUTE
     };
   }
 }
