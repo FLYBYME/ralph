@@ -129,6 +129,11 @@ export class SpecialistExecutor {
         this.logger.info(`Finished with exit code ${exitCode} (${durationMs}ms)`, taskId);
         this.emitComplete(taskId, specialist, durationMs);
 
+        if (exitCode !== 0) {
+          const errMsg = stderrData.trim() || 'No stderr output.';
+          this.logger.error(`${specialist} failed with code ${exitCode}. Error: ${errMsg}`, taskId);
+        }
+
         if (specialist === 'gemini' && exitCode === 53) {
           resolve({
             success: false,

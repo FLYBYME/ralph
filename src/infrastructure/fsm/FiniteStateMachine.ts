@@ -7,7 +7,7 @@ import { ExecuteHandler } from './handlers/ExecuteHandler.js';
 import { VerifyHandler } from './handlers/VerifyHandler.js';
 import { ReviewHandler } from './handlers/ReviewHandler.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
-import { ILlmProvider } from '../llm/types.js';
+import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { PromptBuilder } from '../llm/PromptBuilder.js';
 import { DiskTooling } from '../storage/DiskTooling.js';
 import { SpecialistExecutor } from '../llm/SpecialistExecutor.js';
@@ -23,15 +23,15 @@ export class FiniteStateMachine {
 
   constructor(
     workerManager: WorkerManager,
-    provider: ILlmProvider,
+    providerRegistry: ProviderRegistry,
     promptBuilder: PromptBuilder,
     diskTooling: DiskTooling,
     specialistExecutor: SpecialistExecutor
   ) {
-    this.handlers.set(FsmStep.INVESTIGATE, new InvestigateHandler(workerManager, provider, promptBuilder, diskTooling));
-    this.handlers.set(FsmStep.PLAN, new PlanHandler(workerManager, provider, promptBuilder, diskTooling));
-    this.handlers.set(FsmStep.EXECUTE, new ExecuteHandler(workerManager, provider, promptBuilder, diskTooling, specialistExecutor));
-    this.handlers.set(FsmStep.VERIFY, new VerifyHandler(workerManager, provider, promptBuilder, diskTooling));
+    this.handlers.set(FsmStep.INVESTIGATE, new InvestigateHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
+    this.handlers.set(FsmStep.PLAN, new PlanHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
+    this.handlers.set(FsmStep.EXECUTE, new ExecuteHandler(workerManager, providerRegistry, promptBuilder, diskTooling, specialistExecutor));
+    this.handlers.set(FsmStep.VERIFY, new VerifyHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.AWAITING_REVIEW, new ReviewHandler());
   }
 
@@ -69,6 +69,9 @@ export class FiniteStateMachine {
     } else if (result.status === StepStatus.SUCCESS) {
       // Default sequential advancement
       task.context.currentStep = this.getNextStep(task.context.currentStep || FsmStep.INVESTIGATE);
+    } else if (result.status === StepStatus.FATAL) {
+      // On FATAL failures, move to AWAITING_REVIEW to stop the loop
+      task.context.currentStep = FsmStep.AWAITING_REVIEW;
     }
     // Note: On StepStatus.FAILED without override, currentStep remains the same (retry loop)
 

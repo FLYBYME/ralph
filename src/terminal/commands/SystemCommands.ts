@@ -137,13 +137,33 @@ export const configCommand: CommandDefinition = {
       const settings = await ctx.client.getSettings();
       let text = `${chalk.blue.bold('Current Configuration:')}\n\n`;
       Object.entries(settings).forEach(([k, v]) => {
-        text += `  ${chalk.cyan(k.padEnd(25))} : ${chalk.yellow(v)}\n`;
+        const displayValue = typeof v === 'object' ? JSON.stringify(v, null, 2) : v;
+        text += `  ${chalk.cyan(k.padEnd(25))} : ${chalk.yellow(displayValue)}\n`;
       });
       return { success: true, text };
     }
 
     if (key && value === undefined) {
         return { success: false, message: 'Value is required when updating a key.' };
+    }
+
+    // Special case for 'model' - update the active provider's model
+    if (key === 'model') {
+        try {
+            const settings = await ctx.client.getSettings();
+            const providers = [...settings.providers];
+            const activeIdx = providers.findIndex(p => p.id === settings.activeProviderId);
+            
+            if (activeIdx === -1) {
+                return { success: false, message: `Active provider "${settings.activeProviderId}" not found in configuration.` };
+            }
+
+            providers[activeIdx] = { ...providers[activeIdx], model: value };
+            await ctx.client.patchSettings({ providers });
+            return { success: true, message: `Updated model for active provider (${settings.activeProviderId}) to ${value}` };
+        } catch (err) {
+            return { success: false, message: `Failed to update model: ${err}` };
+        }
     }
 
     // PATCH /api/settings

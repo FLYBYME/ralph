@@ -1,5 +1,5 @@
 import { TaskRecord, FsmStep, ProjectRecord } from '../storage/types.js';
-import { ILlmProvider } from '../llm/types.js';
+import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { PromptBuilder } from '../llm/PromptBuilder.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
 import { CommandManager } from '../commands/CommandManager.js';
@@ -17,7 +17,7 @@ export interface AnalysisResult {
 export class ContextAnalyzer {
   constructor(
     private readonly workerManager: WorkerManager,
-    private readonly provider: ILlmProvider,
+    private readonly providerRegistry: ProviderRegistry,
     private readonly promptBuilder: PromptBuilder,
     private readonly commandManager: CommandManager
   ) {}
@@ -59,12 +59,15 @@ export class ContextAnalyzer {
 
     // 2. LLM Intent Analysis
     console.log(`${color('[analyzer]', colors.dim)} Analyzing intent via LLM...`);
-    const settings = await this.commandManager['storageEngine'].getSettings();
     const conversationHistory = messages.map(m => `@${m.author}: ${m.body}`).join('\n');
-    const payload = this.promptBuilder.buildContextAnalysisPrompt(task, conversationHistory, lastHuman.body, settings.ollamaModel);
+    
+    const provider = this.providerRegistry.getActiveProvider();
+    const model = this.providerRegistry.getActiveModel();
+    
+    const payload = this.promptBuilder.buildContextAnalysisPrompt(task, conversationHistory, lastHuman.body, model);
     
     // We expect a JSON response back
-    const response = await this.workerManager.dispatch(payload, this.provider, settings.ollamaModel);
+    const response = await this.workerManager.dispatch(payload, provider, model);
     
     let analysis: any = null;
     try {
@@ -119,17 +122,27 @@ export class ContextAnalyzer {
         respond(`🕵️‍♂️ Understood. I've updated my notes with your feedback and I'm refocusing.`);
         task.context.currentStep = FsmStep.PLAN;
         task.context.investigation.notes = (task.context.investigation.notes || '') + `\n\n[ADMIN UPDATE]: ${lastHuman.body}`;
+        task.context.execution.attemptCount = 0;
+        task.context.execution.consecutiveErrors = 0;
         return { interrupted: true };
 
       case 'APPROVAL':
-        if (task.context.currentStep === FsmStep.AWAITING_REVIEW || task.status === 'AWAITING_REVIEW') {
-          console.log(`${color('[analyzer]', colors.green)} Intent is APPROVAL. Advancing to EXECUTE.`);
-          task.context.currentStep = FsmStep.EXECUTE;
+        if (task.context.currentStep === FsmStep.AWAITING_REVIEW || task.status === 'AWAITING_REVIEW' || task.status === 'PAUSED') {
+          console.log(`${color('[analyzer]', colors.green)} Intent is APPROVAL. Resuming task.`);
+          
+          if (task.context.currentStep === FsmStep.AWAITING_REVIEW || task.status === 'AWAITING_REVIEW') {
+              task.context.currentStep = FsmStep.EXECUTE;
+              respond(`🚀 Approval granted. Moving to execution phase.`);
+          } else {
+              respond(`🚀 Manual approval received. Resuming task execution.`);
+          }
+          
           task.status = 'IN_PROGRESS';
-          respond(`🚀 Approval granted. Moving to execution phase.`);
+          task.context.execution.attemptCount = 0;
+          task.context.execution.consecutiveErrors = 0;
           return { interrupted: true };
         }
-        console.log(`${color('[analyzer]', colors.yellow)} Intent is APPROVAL but state is not AWAITING_REVIEW. Ignoring.`);
+        console.log(`${color('[analyzer]', colors.yellow)} Intent is APPROVAL but state is not processable. Ignoring.`);
         break;
 
       case 'REJECT':
@@ -137,6 +150,8 @@ export class ContextAnalyzer {
         respond(`🛑 Feedback received. Returning to investigation stage.`);
         task.context.currentStep = FsmStep.INVESTIGATE;
         task.status = 'IN_PROGRESS';
+        task.context.execution.attemptCount = 0;
+        task.context.execution.consecutiveErrors = 0;
         task.context.investigation.notes = (task.context.investigation.notes || '') + `\n\n[ADMIN REJECTED PLAN]: ${lastHuman.body}`;
         return { interrupted: true };
 
@@ -144,6 +159,8 @@ export class ContextAnalyzer {
         console.log(`${color('[analyzer]', colors.green)} Intent is FAST_TRACK. Skipping to EXECUTE.`);
         task.context.currentStep = FsmStep.EXECUTE;
         task.status = 'IN_PROGRESS';
+        task.context.execution.attemptCount = 0;
+        task.context.execution.consecutiveErrors = 0;
         task.context.execution.geminiPrompt = lastHuman.body;
         respond(`⚡ Fast-tracking task based on your instructions.`);
         return { interrupted: true };

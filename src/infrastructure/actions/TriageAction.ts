@@ -1,6 +1,6 @@
 import { IAction, ActionParams, ActionResult } from './types.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
-import { ILlmProvider, WorkerPayload } from '../llm/types.js';
+import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { TaskResolver } from '../storage/TaskResolver.js';
 
 /**
@@ -12,7 +12,7 @@ export class TriageAction implements IAction {
 
   constructor(
     private readonly workerManager: WorkerManager,
-    private readonly provider: ILlmProvider,
+    private readonly providerRegistry: ProviderRegistry,
     private readonly taskResolver: TaskResolver
   ) {}
 
@@ -42,16 +42,17 @@ export class TriageAction implements IAction {
       // Better: let's use 'llama3' as a placeholder or fix the constructor.
       // Actually, let's just assume the provider might have a default or we pass it in params.
       // TO BE SAFE: I'll use 'llama3' but this should be improved.
-      const model = 'llama3'; 
+      const provider = this.providerRegistry.getActiveProvider();
+      const model = this.providerRegistry.getActiveModel();
 
-      const payload: Omit<WorkerPayload, 'model'> = {
+      const payload: any = { // payload might need adjustment for expectedOutputSchema
         systemPrompt,
         userPrompt,
         contextFiles: [],
         expectedOutputSchema: schema
       };
 
-      const response = await this.workerManager.dispatch(payload, this.provider, model);
+      const response = await this.workerManager.dispatch(payload, provider, model);
       const result = JSON.parse(response.rawText || '{}');
 
       return {

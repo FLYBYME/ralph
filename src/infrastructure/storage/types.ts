@@ -36,6 +36,7 @@ export interface ExecutionContext {
   geminiPrompt?: string;
   selectedWorker?: 'gemini' | 'copilot' | 'opencode';
   specialistOutput?: string;
+  consecutiveErrors?: number;
 }
 
 export interface VerificationContext {
@@ -89,6 +90,14 @@ export interface TaskSummary {
   milestone?: string | undefined;
 }
 
+export interface ProviderConfig {
+  id: string; // unique name for this instance
+  providerId: 'ollama-local' | 'openai' | 'anthropic';
+  apiKey?: string;
+  baseURL?: string;
+  model: string;
+}
+
 export interface AppSettings {
   agentMention: string;
   ollamaHost: string;
@@ -102,6 +111,15 @@ export interface AppSettings {
   workerOpencodeModel: string;
   maxBacklog: number;
   maxIterations: number;
+  providers: ProviderConfig[];
+  activeProviderId: string;
+  quotaLocks?: QuotaLock[];
+}
+
+export interface QuotaLock {
+  specialist: 'gemini' | 'copilot' | 'opencode';
+  reason: string;
+  disabledUntil: string; // ISO timestamp
 }
 
 export interface LocalLedger {

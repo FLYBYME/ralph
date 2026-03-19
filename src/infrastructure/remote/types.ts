@@ -83,8 +83,8 @@ export interface IRemoteProvider {
   // ─── Pull Request Lifecycle ──────────────────────────────────────────────
   createPullRequest(owner: string, repo: string, head: string, base: string, title: string, body: string): Promise<{ number: number; url: string }>;
   fetchPullRequest(owner: string, repo: string, prNumber: number): Promise<RemotePullRequest>;
-  getDiff(owner: string, repo: string, prNumber: number): Promise<string>;
-  getModifiedFiles(owner: string, repo: string, prNumber: number): Promise<string[]>;
+  getDiff(owner: string, repo: string, ref: string | number): Promise<string>;
+  getModifiedFiles(owner: string, repo: string, ref: string | number): Promise<string[]>;
   submitReview(owner: string, repo: string, prNumber: number, review: PullRequestReview): Promise<void>;
   mergePullRequest(owner: string, repo: string, prNumber: number, method?: 'merge' | 'squash' | 'rebase'): Promise<void>;
 

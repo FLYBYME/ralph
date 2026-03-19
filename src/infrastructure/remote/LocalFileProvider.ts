@@ -25,12 +25,12 @@ export class LocalFileProvider implements IRemoteProvider {
     };
   }
 
-  public async getDefaultBranch(): Promise<string> { return 'main'; }
-  public async getFileContent(): Promise<string | null> { return null; }
-  public async searchCode(): Promise<string[]> { return []; }
-  public async branchExists(): Promise<boolean> { return false; }
-  public async deleteBranch(): Promise<void> {}
-  public async cloneRepository(): Promise<void> {}
+  public async getDefaultBranch(_owner: string, _repo: string): Promise<string> { return 'main'; }
+  public async getFileContent(_owner: string, _repo: string, _path: string, _ref?: string): Promise<string | null> { return null; }
+  public async searchCode(_owner: string, _repo: string, _query: string): Promise<string[]> { return []; }
+  public async branchExists(_owner: string, _repo: string, _name: string): Promise<boolean> { return false; }
+  public async deleteBranch(_owner: string, _repo: string, _name: string): Promise<void> {}
+  public async cloneRepository(_owner: string, _repo: string, _url: string, _targetPath: string): Promise<void> {}
 
   public async fetchIssue(owner: string, repo: string, issueNumber: number): Promise<RemoteIssue> {
     return {
@@ -47,10 +47,10 @@ export class LocalFileProvider implements IRemoteProvider {
   }
 
   public async listIssues(): Promise<RemoteIssue[]> { return []; }
-  public async updateIssue(): Promise<void> {}
-  public async addLabels(): Promise<void> {}
-  public async removeLabels(): Promise<void> {}
-  public async setAssignees(): Promise<void> {}
+  public async updateIssue(_owner: string, _repo: string, _issueNumber: number, _updates: any): Promise<void> {}
+  public async addLabels(_owner: string, _repo: string, _issueNumber: number, _labels: string[]): Promise<void> {}
+  public async removeLabels(_owner: string, _repo: string, _issueNumber: number, _labels: string[]): Promise<void> {}
+  public async setAssignees(_owner: string, _repo: string, _issueNumber: number, _assignees: string[]): Promise<void> {}
 
   public async createPullRequest(): Promise<{ number: number; url: string }> {
     return { number: 1, url: 'local://pr/1' };
@@ -74,19 +74,19 @@ export class LocalFileProvider implements IRemoteProvider {
     };
   }
 
-  public async getDiff(): Promise<string> { return ''; }
-  public async getModifiedFiles(): Promise<string[]> { return []; }
+  public async getDiff(_owner: string, _repo: string, _ref: string | number): Promise<string> { return ''; }
+  public async getModifiedFiles(_owner: string, _repo: string, _ref: string | number): Promise<string[]> { return []; }
   public async submitReview(): Promise<void> {}
   public async mergePullRequest(): Promise<void> {}
 
-  public async fetchComments(): Promise<RemoteComment[]> { return []; }
+  public async fetchComments(_owner: string, _repo: string, _id: number): Promise<RemoteComment[]> { return []; }
   public async postComment(_owner: string, _repo: string, _id: number | string, body: string): Promise<RemoteComment> {
     return { id: 1, author: 'stub', body, createdAt: new Date().toISOString() };
   }
-  public async updateComment(): Promise<void> {}
-  public async deleteComment(): Promise<void> {}
+  public async updateComment(_owner: string, _repo: string, _commentId: string | number, _body: string): Promise<void> {}
+  public async deleteComment(_owner: string, _repo: string, _commentId: string | number): Promise<void> {}
 
-  public async getLatestCheckRuns(): Promise<CheckRunStatus[]> { return []; }
-  public async getWorkflowLogs(): Promise<string> { return ''; }
-  public async triggerWorkflow(): Promise<void> {}
+  public async getLatestCheckRuns(_owner: string, _repo: string, _ref: string): Promise<CheckRunStatus[]> { return []; }
+  public async getWorkflowLogs(_owner: string, _repo: string, _runId: number): Promise<string> { return ''; }
+  public async triggerWorkflow(_owner: string, _repo: string, _workflowId: string | number, _ref: string): Promise<void> {}
 }

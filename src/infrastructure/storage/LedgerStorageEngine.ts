@@ -50,6 +50,7 @@ export class LedgerStorageEngine {
         ledger.settings = defaults;
         await this.commitLedger(ledger);
       } else {
+        // 1. Merge missing top-level keys
         let changed = false;
         for (const [key, value] of Object.entries(defaults)) {
           if (ledger.settings[key as keyof AppSettings] === undefined) {
@@ -57,9 +58,26 @@ export class LedgerStorageEngine {
             changed = true;
           }
         }
+
+        // 2. Merge missing providers
+        if (defaults.providers) {
+          if (!ledger.settings.providers) {
+            ledger.settings.providers = defaults.providers;
+            changed = true;
+          } else {
+            for (const defProvider of defaults.providers) {
+              const exists = ledger.settings.providers.find(p => p.id === defProvider.id);
+              if (!exists) {
+                ledger.settings.providers.push(defProvider);
+                changed = true;
+              }
+            }
+          }
+        }
+
         if (changed) {
           await this.commitLedger(ledger);
-          this.logger.info('Migrated ledger settings with new default keys.');
+          this.logger.info('Migrated ledger settings with new default keys/providers.');
         }
       }
     } catch (error) {
@@ -81,8 +99,8 @@ export class LedgerStorageEngine {
   private getDefaultSettings(): AppSettings {
     return {
       agentMention: process.env.AGENT_MENTION || 'ralph',
-      ollamaHost: process.env.OLLAMA_HOST || 'http://192.168.1.6:11434',
-      ollamaModel: process.env.OLLAMA_MODEL || 'qwen3:4b-instruct',
+      ollamaHost: process.env.OLLAMA_HOST || 'http://localhost:11434',
+      ollamaModel: process.env.OLLAMA_MODEL || 'llama3',
       serverPort: parseInt(process.env.PORT || '3000', 10),
       workerGeminiEnabled: process.env.ENABLE_GEMINI !== 'false',
       workerGeminiModel: process.env.GEMINI_MODEL || '',
@@ -92,6 +110,56 @@ export class LedgerStorageEngine {
       workerOpencodeModel: process.env.OPENCODE_MODEL || '',
       maxBacklog: parseInt(process.env.MAX_BACKLOG || '200', 10),
       maxIterations: parseInt(process.env.MAX_ITERATIONS || '10', 10),
+      activeProviderId: process.env.ACTIVE_LLM_PROVIDER || 'ollama-local',
+      providers: [
+        {
+          id: 'ollama-local',
+          providerId: 'ollama-local',
+          baseURL: process.env.OLLAMA_HOST || 'http://localhost:11434',
+          model: process.env.OLLAMA_MODEL || 'llama3',
+        },
+        {
+          id: 'openai-official',
+          providerId: 'openai',
+          apiKey: process.env.OPENAI_API_KEY || '',
+          baseURL: 'https://api.openai.com/v1',
+          model: 'gpt-4o',
+        },
+        {
+          id: 'anthropic-official',
+          providerId: 'anthropic',
+          apiKey: process.env.ANTHROPIC_API_KEY || '',
+          baseURL: 'https://api.anthropic.com/v1',
+          model: 'claude-3-5-sonnet-20240620',
+        },
+        {
+          id: 'google-gemini',
+          providerId: 'openai',
+          apiKey: process.env.GEMINI_API_KEY || '',
+          baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+          model: 'gemini-1.5-pro',
+        },
+        {
+          id: 'openrouter',
+          providerId: 'openai',
+          apiKey: process.env.OPENROUTER_API_KEY || '',
+          baseURL: 'https://openrouter.ai/api/v1',
+          model: 'anthropic/claude-3.5-sonnet',
+        },
+        {
+          id: 'ollama-v1',
+          providerId: 'openai',
+          baseURL: 'http://localhost:11434/v1/',
+          model: 'llama3',
+        },
+        {
+          id: 'sambanova',
+          providerId: 'openai',
+          apiKey: process.env.SAMBANOVA_API_KEY || '',
+          baseURL: 'https://api.sambanova.ai/v1',
+          model: 'Meta-Llama-3.1-70B-Instruct',
+        }
+      ]
     };
   }
 

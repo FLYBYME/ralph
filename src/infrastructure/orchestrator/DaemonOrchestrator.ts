@@ -5,7 +5,9 @@ import { LocalEventBus } from '../bus/LocalEventBus.js';
 import { FiniteStateMachine } from '../fsm/FiniteStateMachine.js';
 import { StepResult, StepStatus } from '../fsm/types.js';
 import { ContextAnalyzer } from '../fsm/ContextAnalyzer.js';
+import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { createLogger, Logger } from '../logging/Logger.js';
+import { TaskSummary } from '../storage/types.js';
 
 export interface IWorkerManager {
   killAllProcesses(): Promise<void>;
@@ -28,6 +30,7 @@ export class DaemonOrchestrator {
     private readonly eventBus: LocalEventBus,
     private readonly fsm: FiniteStateMachine,
     private readonly workerManager: IWorkerManager,
+    private readonly providerRegistry: ProviderRegistry,
     private readonly contextAnalyzer?: ContextAnalyzer
   ) {
     this.logger = createLogger('orchestrator', eventBus);
@@ -105,124 +108,168 @@ export class DaemonOrchestrator {
     this.logger.info(`⚙️ TICK ${this.tickCount} | Task: ${task.id.slice(0, 8)} | Status: ${task.status}`, task.id);
 
     try {
-        // Load the full task record
-        let taskRecord;
-        try {
-            taskRecord = await this.storageEngine.getTaskRecord(task.id);
-        } catch (recordError) {
-            this.logger.warn(`Task record for ${task.id} missing on disk. Removing from ledger summary.`, task.id);
-            await this.storageEngine.mutateLedger(async (ledger) => {
-                ledger.tasks = ledger.tasks.filter(t => t.id !== task.id);
-            });
-            return;
-        }
-
-        const oldStep = taskRecord.context.currentStep;
-
-        // Load project info
-        const ledger = await this.storageEngine.getLedger();
-        const project = ledger.projects.find(p => p.id === taskRecord.projectId);
+        await this.processTask(task);
+    } catch (error) {
+        this.logger.error(`FSM execution failure for task ${task.id}: ${error}`, task.id);
         
-        if (!project) {
-            throw new Error(`Project ${taskRecord.projectId} not found in ledger for task ${task.id}`);
-        }
-
-        // 3. Human-in-the-Loop Context Analysis
-        if (this.contextAnalyzer) {
-            const analysis = await this.contextAnalyzer.analyzeContext(taskRecord, project);
-            if (analysis.interrupted) {
-                this.logger.warn('✋ INTERRUPT detected. Pivot triggered.', task.id);
-                await this.storageEngine.commitTaskRecord(taskRecord);
-                
-                await this.storageEngine.mutateLedger(async (ledger) => {
-                    const summary = ledger.tasks.find(t => t.id === task.id);
-                    if (summary && summary.status !== taskRecord.status) {
-                        summary.status = taskRecord.status;
-                    }
-                });
-                return;
-            }
-        }
-
-        // 4. Enforce max iterations from settings
-        const settings = await this.storageEngine.getSettings();
-        if (taskRecord.context.execution.attemptCount >= settings.maxIterations) {
-            this.logger.error(`Max iterations reached (${settings.maxIterations}). Pausing task.`, task.id);
-            taskRecord.status = 'PAUSED';
-            taskRecord.thread.messages.push({
-                id: crypto.randomUUID(),
-                author: 'SYSTEM',
-                intent: 'ERROR',
-                body: `Automated execution reached the maximum allowed iterations (${settings.maxIterations}). Task paused for human intervention.`,
-                timestamp: new Date().toISOString()
-            });
-            await this.storageEngine.commitTaskRecord(taskRecord);
+        // Persistence of the error count
+        try {
+            const taskRecord = await this.storageEngine.getTaskRecord(task.id);
+            taskRecord.context.execution.consecutiveErrors = (taskRecord.context.execution.consecutiveErrors || 0) + 1;
             
+            if (taskRecord.context.execution.consecutiveErrors >= 3) {
+                this.logger.error(`Too many consecutive FSM errors (${taskRecord.context.execution.consecutiveErrors}). Pausing task for safety.`, task.id);
+                taskRecord.status = 'PAUSED';
+                taskRecord.thread.messages.push({
+                    id: crypto.randomUUID(),
+                    author: 'SYSTEM',
+                    intent: 'ERROR',
+                    body: `FSM execution failed consecutively 3 times. Task paused to prevent infinite loop. Error: ${error}`,
+                    timestamp: new Date().toISOString()
+                });
+            }
+            
+            await this.storageEngine.commitTaskRecord(taskRecord);
             // Sync status to Ledger summary
             await this.storageEngine.mutateLedger(async (ledger) => {
                 const summary = ledger.tasks.find(t => t.id === task.id);
                 if (summary) {
-                    summary.status = 'PAUSED';
+                    summary.status = taskRecord.status;
+                }
+            });
+        } catch (innerErr) {
+            this.logger.error(`Double-fault during error recovery: ${innerErr}`, task.id);
+        }
+    }
+  }
+
+  public async processTask(task: TaskSummary) {
+    const settings = await this.storageEngine.getSettings();
+    const taskRecord = await this.storageEngine.getTaskRecord(task.id);
+    const project = await this.storageEngine.getProject(taskRecord.projectId);
+    
+    if (!project) {
+        this.logger.error(`Project ${taskRecord.projectId} not found for task ${task.id}`, task.id);
+        return;
+    }
+
+    // Consume human input flag immediately
+    if (task.humanInputReceived) {
+        await this.storageEngine.mutateLedger(async (ledger) => {
+            const summary = ledger.tasks.find(t => t.id === task.id);
+            if (summary) summary.humanInputReceived = false;
+        });
+    }
+
+    const oldStep = taskRecord.context.currentStep;
+
+    // Sync active provider on the fly
+    try {
+        this.providerRegistry.setActiveProvider(settings.activeProviderId);
+    } catch (err) {
+        this.logger.debug(`Failed to sync active provider: ${err}`);
+    }
+
+    // 3. Human-in-the-Loop Context Analysis
+    if (this.contextAnalyzer) {
+        const analysis = await this.contextAnalyzer.analyzeContext(taskRecord, project);
+        if (analysis.interrupted) {
+            this.logger.warn('✋ INTERRUPT detected. Pivot triggered.', task.id);
+            await this.storageEngine.commitTaskRecord(taskRecord);
+            
+            await this.storageEngine.mutateLedger(async (ledger) => {
+                const summary = ledger.tasks.find(t => t.id === task.id);
+                if (summary) {
+                    summary.status = taskRecord.status;
                 }
             });
             return;
         }
+    }
 
-        // Execute exactly one step of the FSM
-        this.logger.info(`▶️ Executing ${oldStep}... (Iteration: ${taskRecord.context.execution.attemptCount + 1}/${settings.maxIterations})`, task.id);
-        
-        // Increment attempt count
-        taskRecord.context.execution.attemptCount++;
-
-        const result: StepResult = await this.fsm.processTick(taskRecord, project, this.storageEngine);
-        this.logger.info(`🏁 ${oldStep} finished with status: ${result.status}`, task.id);
-        
-        // Apply transitions (memory merges, state advances)
-        this.fsm.applyTransition(taskRecord, result);
-
-        // Commit updated state to disk
-        await this.storageEngine.commitTaskRecord(taskRecord);
-
-        // 1. Sync status back to the master Ledger (projection)
-        await this.storageEngine.mutateLedger(async (ledger) => {
-          const summary = ledger.tasks.find(t => t.id === task.id);
-          if (summary && summary.status !== taskRecord.status) {
-              summary.status = taskRecord.status;
-          }
+    // 4. Enforce max iterations from settings
+    if (taskRecord.context.execution.attemptCount >= settings.maxIterations) {
+        this.logger.error(`Max iterations reached (${settings.maxIterations}). Pausing task.`, task.id);
+        taskRecord.status = 'PAUSED';
+        taskRecord.thread.messages.push({
+            id: crypto.randomUUID(),
+            author: 'SYSTEM',
+            intent: 'ERROR',
+            body: `Automated execution reached the maximum allowed iterations (${settings.maxIterations}). Task paused for human intervention.`,
+            timestamp: new Date().toISOString()
         });
-
-        // 2. Handle Yielding
-        if (result.status === StepStatus.YIELD) {
-            let reason = taskRecord.status === 'AWAITING_REVIEW' ? YieldReason.AWAITING_REVIEW : YieldReason.RESOURCE_BUSY;
-            let resumeAfterMs = 0;
-
-            if (result.humanMessage?.includes('Rate Limit Hit') && result.humanMessage.includes('wait approximately')) {
-                reason = YieldReason.RATE_LIMIT;
-                const match = result.humanMessage.match(/wait approximately (\d+)h(?:(\d+)m)?(?:(\d+)s)?/);
-                if (match) {
-                    const hours = parseInt(match[1] || '0', 10);
-                    const minutes = parseInt(match[2] || '0', 10);
-                    const seconds = parseInt(match[3] || '0', 10);
-                    resumeAfterMs = ((hours * 60 * 60) + (minutes * 60) + seconds + 300) * 1000;
-                    this.logger.warn(`⏳ Task slept for ${Math.round(resumeAfterMs/1000/60)} minutes due to rate limit.`, task.id);
-                }
+        await this.storageEngine.commitTaskRecord(taskRecord);
+        
+        // Sync status to Ledger summary
+        await this.storageEngine.mutateLedger(async (ledger) => {
+            const summary = ledger.tasks.find(t => t.id === task.id);
+            if (summary) {
+                summary.status = 'PAUSED';
             }
+        });
+        return;
+    }
 
-            this.logger.info(`⏸️ Task yielded (Reason: ${reason})`, task.id);
-            await this.taskQueue.yieldTask(task.id, reason, resumeAfterMs);
+    // Execute exactly one step of the FSM
+    this.logger.info(`▶️ Executing ${oldStep}... (Iteration: ${taskRecord.context.execution.attemptCount + 1}/${settings.maxIterations})`, task.id);
+    
+    // Increment and commit immediately to prevent disk-looping if it crashes
+    taskRecord.context.execution.attemptCount++;
+    await this.storageEngine.commitTaskRecord(taskRecord);
+
+    const result: StepResult = await this.fsm.processTick(taskRecord, project, this.storageEngine);
+    this.logger.info(`🏁 ${oldStep} finished with status: ${result.status}`, task.id);
+    
+    // Reset consecutive errors on successful execute
+    taskRecord.context.execution.consecutiveErrors = 0;
+
+    if (result.status !== StepStatus.SUCCESS && result.humanMessage) {
+        this.logger.warn(`   Reason: ${result.humanMessage}`, task.id);
+    }
+    
+    // Apply transitions (memory merges, state advances)
+    this.fsm.applyTransition(taskRecord, result);
+
+    // Commit updated state to disk
+    await this.storageEngine.commitTaskRecord(taskRecord);
+
+    // 1. Sync status back to the master Ledger (projection)
+    await this.storageEngine.mutateLedger(async (ledger) => {
+      const summary = ledger.tasks.find(t => t.id === task.id);
+      if (summary && summary.status !== taskRecord.status) {
+          summary.status = taskRecord.status;
+      }
+    });
+
+    // 2. Handle Yielding
+    if (result.status === StepStatus.YIELD) {
+        let reason = taskRecord.status === 'AWAITING_REVIEW' ? YieldReason.AWAITING_REVIEW : YieldReason.RESOURCE_BUSY;
+        let resumeAfterMs = 0;
+
+        if (result.humanMessage?.includes('Rate Limit Hit') && result.humanMessage.includes('wait approximately')) {
+            reason = YieldReason.RATE_LIMIT;
+            const match = result.humanMessage.match(/wait approximately (\d+)h(?:(\d+)m)?(?:(\d+)s)?/);
+            if (match) {
+                const hours = parseInt(match[1] || '0', 10);
+                const minutes = parseInt(match[2] || '0', 10);
+                const seconds = parseInt(match[3] || '0', 10);
+                resumeAfterMs = ((hours * 60 * 60) + (minutes * 60) + seconds + 300) * 1000;
+                this.logger.warn(`⏳ Task slept for ${Math.round(resumeAfterMs/1000/60)} minutes due to rate limit.`, task.id);
+            }
         }
 
-        // Broadcast result via EventBus
-        this.eventBus.publish({
-            type: 'FSM_TRANSITION',
-            taskId: task.id,
-            timestamp: new Date().toISOString(),
-            oldState: oldStep,
-            newState: taskRecord.context.currentStep
-        });
-    } catch (error) {
-        this.logger.error(`FSM execution failure for task ${task.id}: ${error}`, task.id);
+        this.logger.info(`⏸️ Task yielded (Reason: ${reason})`, task.id);
+        await this.taskQueue.yieldTask(task.id, reason, resumeAfterMs);
     }
+
+    // Broadcast result via EventBus
+    this.eventBus.publish({
+        type: 'FSM_TRANSITION',
+        taskId: task.id,
+        timestamp: new Date().toISOString(),
+        oldState: oldStep,
+        newState: taskRecord.context.currentStep
+    });
   }
 
   /**

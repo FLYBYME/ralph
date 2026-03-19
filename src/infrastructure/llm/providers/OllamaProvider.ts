@@ -19,17 +19,12 @@ export class OllamaProvider implements ILlmProvider {
   }
 
   /**
-   * Ping the Ollama server and verify the target model is available.
+   * Ping the Ollama server to verify connectivity.
    */
-  public async ping(model: string = 'llama3'): Promise<boolean> {
+  public async ping(): Promise<boolean> {
     try {
-      const tags = await this.client.list();
-      const modelNames = tags.models.map((m) => m.name);
-      
-      // Ollama model names may include a tag suffix (e.g., "llama3:latest")
-      return modelNames.some(
-        (n) => n === model || n.startsWith(`${model}:`)
-      );
+      await this.client.list();
+      return true;
     } catch (err) {
       console.error(`${color('[ollama]', colors.red)} Cannot reach Ollama at ${this.host}. (${String(err)})`);
       return false;
@@ -39,7 +34,27 @@ export class OllamaProvider implements ILlmProvider {
   public async generateResponse(payload: WorkerPayload): Promise<WorkerResponse> {
     const startTime = Date.now();
 
-    const messages: Message[] = payload.messages || [
+    const messages: Message[] = payload.messages?.map(m => {
+        if (m.tool_calls) {
+            return {
+                role: m.role,
+                content: m.content || '',
+                tool_calls: m.tool_calls.map((tc: any) => ({
+                    function: {
+                        name: tc.function.name,
+                        arguments: typeof tc.function.arguments === 'string'
+                          ? JSON.parse(tc.function.arguments)
+                          : tc.function.arguments
+                    }
+                }))
+            };
+        }
+        return {
+            role: m.role,
+            content: m.content || '',
+            tool_call_id: m.tool_call_id
+        } as Message;
+    }) || [
       { role: 'system', content: payload.systemPrompt },
       { role: 'user', content: payload.userPrompt }
     ];
@@ -65,7 +80,7 @@ export class OllamaProvider implements ILlmProvider {
       };
 
       if (payload.tools) {
-        request.tools = payload.tools;
+        request.tools = payload.tools as any;
       }
 
       const response = await this.client.chat(request);
@@ -114,7 +129,7 @@ export class OllamaProvider implements ILlmProvider {
     };
 
     if (payload.tools) {
-      request.tools = payload.tools;
+      request.tools = payload.tools as any;
     }
 
     const responseStream = await this.client.chat(request);

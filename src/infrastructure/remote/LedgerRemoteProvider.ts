@@ -171,16 +171,56 @@ export class LedgerRemoteProvider implements IRemoteProvider {
     };
   }
 
-  public async getDiff(owner: string, repo: string, _prNumber: number): Promise<string> {
+  public async getDiff(owner: string, repo: string, ref: string | number): Promise<string> {
     const repoInfo = await this.fetchRepository(owner, repo);
     const cwd = repoInfo.url.replace('local://', '');
+
+    if (typeof ref === 'string' && ref.length > 0) {
+        try {
+            const task = await this.storageEngine.getTaskRecord(ref);
+            // If the task hasn't executed yet, don't show the global repo diff
+            const unexecutedStates = ['OPEN', 'PLAN', 'INVESTIGATE'];
+            if (unexecutedStates.includes(task.status) || unexecutedStates.includes(task.context.currentStep)) {
+                return `[Task ${ref}] has not reached the EXECUTE phase yet. No autonomous changes applied to disk.`;
+            }
+
+            // If we have specific target files in the plan, filter the diff to those files
+            const targetFiles = task.context.planning?.targetFiles || [];
+            if (targetFiles.length > 0) {
+                const { stdout } = await execAsync(`git diff main -- ${targetFiles.join(' ')}`, { cwd });
+                return stdout || `No changes detected in target files: ${targetFiles.join(', ')}`;
+            }
+        } catch (err) {
+            // Fallback if task record lookup fails
+            console.debug(`[LedgerRemoteProvider] Failed to lookup task ${ref} for diff: ${err}`);
+        }
+    }
+
     const { stdout } = await execAsync(`git diff main`, { cwd });
     return stdout;
   }
 
-  public async getModifiedFiles(owner: string, repo: string, _prNumber: number): Promise<string[]> {
+  public async getModifiedFiles(owner: string, repo: string, ref: string | number): Promise<string[]> {
     const repoInfo = await this.fetchRepository(owner, repo);
     const cwd = repoInfo.url.replace('local://', '');
+
+    if (typeof ref === 'string' && ref.length > 0) {
+        try {
+            const task = await this.storageEngine.getTaskRecord(ref);
+            // If the task hasn't executed yet, don't show the global repo diff
+            const unexecutedStates = ['OPEN', 'PLAN', 'INVESTIGATE'];
+            if (unexecutedStates.includes(task.status) || unexecutedStates.includes(task.context.currentStep)) {
+                return [];
+            }
+
+            const targetFiles = task.context.planning?.targetFiles || [];
+            if (targetFiles.length > 0) {
+                const { stdout } = await execAsync(`git diff --name-only main -- ${targetFiles.join(' ')}`, { cwd });
+                return stdout.trim().split('\n').filter(Boolean);
+            }
+        } catch {}
+    }
+
     const { stdout } = await execAsync(`git diff --name-only main`, { cwd });
     return stdout.trim().split('\n').filter(Boolean);
   }

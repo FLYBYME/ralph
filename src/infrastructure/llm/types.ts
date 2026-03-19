@@ -27,6 +27,7 @@ export interface WorkerTool {
 }
 
 export interface ToolCall {
+  id?: string;
   function: {
     name: string;
     arguments: Record<string, unknown>;

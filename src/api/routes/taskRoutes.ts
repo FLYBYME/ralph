@@ -120,7 +120,7 @@ export function createTaskRouter(deps: ServerDependencies): Router {
       if (!project) return res.status(404).json({ error: 'Project not found' });
       
       const [owner, repo] = project.name.split('/');
-      const diff = await deps.remoteProvider.getDiff(owner || '', repo || project.name, 0);
+      const diff = await deps.remoteProvider.getDiff(owner || '', repo || project.name, req.params.id);
       res.type('text/plain').send(diff);
     } catch (error) {
       res.status(500).json({ error: String(error) });

@@ -1,6 +1,10 @@
+import 'dotenv/config';
 import { LocalEventBus } from './infrastructure/bus/LocalEventBus.js';
 import { WorkerManager } from './infrastructure/llm/WorkerManager.js';
 import { OllamaProvider } from './infrastructure/llm/providers/OllamaProvider.js';
+import { OpenAIProvider } from './infrastructure/llm/providers/OpenAIProvider.js';
+import { AnthropicProvider } from './infrastructure/llm/providers/AnthropicProvider.js';
+import { ProviderRegistry } from './infrastructure/llm/ProviderRegistry.js';
 import { PromptBuilder } from './infrastructure/llm/PromptBuilder.js';
 import { LedgerStorageEngine } from './infrastructure/storage/LedgerStorageEngine.js';
 import { DiskTooling } from './infrastructure/storage/DiskTooling.js';
@@ -29,20 +33,40 @@ async function main() {
   // Bootstrap environment to ensure ledger and settings exist
   await storageEngine.bootstrapEnvironment();
   const settings = await storageEngine.getSettings();
-  
+
   // Apply operational limits from settings
   eventBus.setMaxBacklog(settings.maxBacklog);
 
   logger.info('--- Ralph AI Agent ---');
   logger.info(`Model: ${settings.ollamaModel}`);
   logger.info(`Host: ${settings.ollamaHost}`);
+  logger.info(`Active Provider: ${settings.activeProviderId}`);
   logger.info('----------------------');
 
-  const ollamaProvider = new OllamaProvider(settings.ollamaHost);
+  const providerRegistry = new ProviderRegistry();
+
+  for (const config of settings.providers) {
+    if (config.providerId === 'ollama-local') {
+      providerRegistry.register(new OllamaProvider(config.baseURL || 'http://localhost:11434'), config);
+    } else if (config.providerId === 'openai') {
+      providerRegistry.register(new OpenAIProvider(config.apiKey || '', config.baseURL, config.id), config);
+    } else if (config.providerId === 'anthropic') {
+      providerRegistry.register(new AnthropicProvider(config.id, config.apiKey || '', config.baseURL), config);
+    }
+  }
+
+  try {
+    providerRegistry.setActiveProvider(settings.activeProviderId);
+  } catch (err) {
+    logger.warn(`Failed to set active provider "${settings.activeProviderId}": ${err}. Falling back to first available.`);
+    const first = providerRegistry.getAllProviders()[0];
+    if (first) providerRegistry.setActiveProvider(first.providerId);
+  }
+
   const workerManager = new WorkerManager(eventBus);
   const promptBuilder = new PromptBuilder();
-  const commandManager = new CommandManager(storageEngine, eventBus, workerManager, ollamaProvider);
-  const contextAnalyzer = new ContextAnalyzer(workerManager, ollamaProvider, promptBuilder, commandManager);
+  const commandManager = new CommandManager(storageEngine, eventBus, workerManager, providerRegistry);
+  const contextAnalyzer = new ContextAnalyzer(workerManager, providerRegistry, promptBuilder, commandManager);
   const specialistExecutor = new SpecialistExecutor(eventBus, storageEngine);
 
   // 2. Actions & Remote Setup
@@ -51,12 +75,12 @@ async function main() {
   const actionRegistry = new ActionRegistry();
 
   actionRegistry.register(new SolveAction(storageEngine, eventBus, taskResolver));
-  actionRegistry.register(new TriageAction(workerManager, ollamaProvider, taskResolver));
+  actionRegistry.register(new TriageAction(workerManager, providerRegistry, taskResolver));
 
   const taskQueue = new TaskQueue(storageEngine);
   const fsm = new FiniteStateMachine(
     workerManager,
-    ollamaProvider,
+    providerRegistry,
     promptBuilder,
     diskTooling,
     specialistExecutor
@@ -69,10 +93,13 @@ async function main() {
     eventBus,
     fsm,
     workerManager,
+    providerRegistry,
     contextAnalyzer
   );
 
   // 4. Unified Event Logging via Logger
+  const specialistBuffers = new Map<string, string>();
+
   eventBus.subscribe('FSM_TRANSITION', (event) => {
     if (event.type === 'FSM_TRANSITION') {
       logger.info(`Task ${event.taskId.slice(0, 8)}: ${event.oldState} -> ${event.newState}`, event.taskId);
@@ -87,16 +114,35 @@ async function main() {
 
   eventBus.subscribe('SPECIALIST_COMPLETE', (event) => {
     if (event.type === 'SPECIALIST_COMPLETE') {
+      // Flush any remaining buffer
+      const key = `${event.taskId}-${event.specialist}`;
+      const buffer = specialistBuffers.get(key);
+      if (buffer) {
+        logger.info(`[${event.specialist}] ${buffer.trim()}`, event.taskId);
+        specialistBuffers.delete(key);
+      }
       logger.info(`[worker:${event.specialist}] ✅ Completed in ${event.durationMs}ms`, event.taskId);
     }
   });
 
   eventBus.subscribe('SPECIALIST_LOG', (event) => {
     if (event.type === 'SPECIALIST_LOG') {
-      if (event.stream === 'stderr') {
-        logger.error(`[${event.specialist}:err] ${event.text.trim()}`, event.taskId);
-      } else {
-        logger.info(`[${event.specialist}] ${event.text.trim()}`, event.taskId);
+      const key = `${event.taskId}-${event.specialist}`;
+      let buffer = specialistBuffers.get(key) || '';
+      buffer += event.text;
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; 
+      specialistBuffers.set(key, buffer);
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (event.stream === 'stderr') {
+          logger.error(`[${event.specialist}:err] ${trimmed}`, event.taskId);
+        } else {
+          logger.info(`[${event.specialist}] ${trimmed}`, event.taskId);
+        }
       }
     }
   });
@@ -113,20 +159,25 @@ async function main() {
 
   eventBus.subscribe('WORKER_STREAM', (event) => {
     if (event.type === 'WORKER_STREAM') {
-      if (event.thinking) process.stdout.write(event.thinking);
-      if (event.chunk) process.stdout.write(event.chunk);
+       // Direct stdout write for real-time feel if needed, but keep it clean
+       if (event.thinking || event.chunk) {
+          const text = event.thinking || event.chunk || '';
+          process.stdout.write(text);
+       }
     }
   });
 
   // 5. Boot the system
   try {
-    const isOllamaUp = await ollamaProvider.ping(settings.ollamaModel);
-    if (!isOllamaUp) {
-      logger.error(`Ollama model "${settings.ollamaModel}" not found at ${settings.ollamaHost}.`);
+    const activeProvider = providerRegistry.getActiveProvider();
+    const isProviderUp = await activeProvider.ping();
+    if (!isProviderUp) {
+      console.log(activeProvider);
+      logger.error(`LLM Provider "${activeProvider.providerId}" is not responding.`);
       process.exit(1);
     }
 
-    await startServer(settings.serverPort, { storageEngine, actionRegistry, eventBus, remoteProvider, ollamaProvider, workerManager });
+    await startServer(settings.serverPort, { storageEngine, actionRegistry, eventBus, remoteProvider, ollamaProvider: activeProvider, workerManager });
     await orchestrator.boot();
   } catch (error) {
     logger.error(`Fatal error during boot: ${error}`);

@@ -2,16 +2,17 @@ import { StateContext, TaskRecord, FsmStep, ProjectRecord } from '../../storage/
 import { StepResult, StepStatus } from '../types.js';
 import { IStepHandler } from './IStepHandler.js';
 import { WorkerManager } from '../../llm/WorkerManager.js';
-import { ILlmProvider } from '../../llm/types.js';
 import { PromptBuilder } from '../../llm/PromptBuilder.js';
 import { DiskTooling } from '../../storage/DiskTooling.js';
 import { createToolRegistry } from '../../llm/ToolRegistry.js';
 import { LedgerStorageEngine } from '../../storage/LedgerStorageEngine.js';
 
+import { ProviderRegistry } from '../../llm/ProviderRegistry.js';
+
 export class InvestigateHandler implements IStepHandler {
   constructor(
     private readonly workerManager: WorkerManager,
-    private readonly provider: ILlmProvider,
+    private readonly providerRegistry: ProviderRegistry,
     _promptBuilder: PromptBuilder,
     _diskTooling: DiskTooling
   ) {}
@@ -21,11 +22,10 @@ export class InvestigateHandler implements IStepHandler {
   }
 
   public async execute(task: TaskRecord, project: ProjectRecord, storageEngine: LedgerStorageEngine): Promise<StepResult> {
-    const settings = await storageEngine.getSettings();
     const registry = createToolRegistry({
       repoPath: project.absolutePath,
       workerManager: this.workerManager,
-      workerProvider: this.provider,
+      workerProvider: this.providerRegistry.getActiveProvider(),
       storageEngine: storageEngine
     });
 
@@ -51,11 +51,14 @@ ${task.objective.originalPrompt || '(no description)'}
 
 IMPORTANT: You must start by calling the 'listDirectory' tool to see what is in the repository. Do not guess.`;
 
+    const provider = this.providerRegistry.getActiveProvider();
+    const model = this.providerRegistry.getActiveModel();
+
     const result = await this.workerManager.reactDispatch({
-        model: settings.ollamaModel,
+        model,
         systemPrompt,
         initialPrompt: userPrompt,
-        provider: this.provider,
+        provider,
         tools: registry,
         taskId: task.id
     });

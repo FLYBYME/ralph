@@ -2,15 +2,16 @@ import { StateContext, TaskRecord, FsmStep, ProjectRecord } from '../../storage/
 import { StepResult, StepStatus } from '../types.js';
 import { IStepHandler } from './IStepHandler.js';
 import { WorkerManager } from '../../llm/WorkerManager.js';
-import { ILlmProvider, WorkerPayload } from '../../llm/types.js';
+import { WorkerPayload } from '../../llm/types.js';
 import { PromptBuilder } from '../../llm/PromptBuilder.js';
 import { DiskTooling } from '../../storage/DiskTooling.js';
 import { LedgerStorageEngine } from '../../storage/LedgerStorageEngine.js';
+import { ProviderRegistry } from '../../llm/ProviderRegistry.js';
 
 export class PlanHandler implements IStepHandler {
   constructor(
     private readonly workerManager: WorkerManager,
-    private readonly provider: ILlmProvider,
+    private readonly providerRegistry: ProviderRegistry,
     _promptBuilder: PromptBuilder,
     _diskTooling: DiskTooling
   ) {}
@@ -21,6 +22,11 @@ export class PlanHandler implements IStepHandler {
 
   public async execute(task: TaskRecord, _project: ProjectRecord, storageEngine: LedgerStorageEngine): Promise<StepResult> {
     const settings = await storageEngine.getSettings();
+    const now = new Date().toISOString();
+    const lockedSpecialists = (settings.quotaLocks || [])
+        .filter(lock => lock.disabledUntil > now)
+        .map(lock => lock.specialist);
+
     const selectedWorker = task.context.execution?.selectedWorker || 'gemini';
     const investigationNotes = task.context.investigation.notes || "No investigation notes.";
 
@@ -28,6 +34,7 @@ export class PlanHandler implements IStepHandler {
     
 ## Guidelines:
 - **Selected Worker**: Choose 'gemini' for general complex logic, 'copilot' for boilerplate, and 'opencode' for shell tasks.
+${lockedSpecialists.length > 0 ? `- **UNAVAILABLE WORKERS**: Do NOT choose ${lockedSpecialists.join(', ')} as they are currently out of quota.` : ''}
 - **Instructions**: Be extremely specific. Include exact function names to modify or create.
 - **Files**: Maximum 6 files.`;
 
@@ -66,7 +73,10 @@ Respond with a JSON object in this format:
         expectedOutputSchema: schema
     };
 
-    const response = await this.workerManager.dispatch(payload, this.provider, settings.ollamaModel);
+    const provider = this.providerRegistry.getActiveProvider();
+    const model = this.providerRegistry.getActiveModel();
+
+    const response = await this.workerManager.dispatch(payload, provider, model);
     
     let plan: any = null;
     try {

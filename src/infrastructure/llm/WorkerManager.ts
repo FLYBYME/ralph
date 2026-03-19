@@ -96,7 +96,10 @@ export class WorkerManager {
       const assistantMsg = { 
           role: 'assistant', 
           content: response.rawText || '', 
-          tool_calls: response.tool_calls 
+          tool_calls: response.tool_calls?.map(tc => ({
+              ...tc,
+              type: 'function'
+          }))
       };
 
       console.log(`${color('[ollama:thought]', colors.cyan)} ${assistantMsg.content || '(tool call)'}`);
@@ -121,7 +124,7 @@ export class WorkerManager {
         const tool = tools.get(toolName);
         if (!tool) {
           const errMsg = `Unknown tool "${toolName}".`;
-          messages.push({ role: 'tool', content: errMsg });
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: errMsg });
           continue;
         }
 
@@ -140,7 +143,7 @@ export class WorkerManager {
             }
           });
 
-          messages.push({ role: 'tool', content: result.output });
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: result.output });
         } catch (err) {
           if (err instanceof PlanProposedError) {
             return {

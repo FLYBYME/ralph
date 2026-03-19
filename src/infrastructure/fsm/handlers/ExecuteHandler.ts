@@ -2,16 +2,17 @@ import { StateContext, TaskRecord, FsmStep, ProjectRecord } from '../../storage/
 import { StepResult, StepStatus } from '../types.js';
 import { IStepHandler } from './IStepHandler.js';
 import { WorkerManager } from '../../llm/WorkerManager.js';
-import { ILlmProvider } from '../../llm/types.js';
 import { PromptBuilder } from '../../llm/PromptBuilder.js';
 import { DiskTooling } from '../../storage/DiskTooling.js';
 import { SpecialistExecutor, WorkerSpecialist } from '../../llm/SpecialistExecutor.js';
 import { LedgerStorageEngine } from '../../storage/LedgerStorageEngine.js';
 
+import { ProviderRegistry } from '../../llm/ProviderRegistry.js';
+
 export class ExecuteHandler implements IStepHandler {
   constructor(
     _workerManager: WorkerManager,
-    _provider: ILlmProvider,
+    _providerRegistry: ProviderRegistry,
     _promptBuilder: PromptBuilder,
     _diskTooling: DiskTooling,
     private readonly specialistExecutor: SpecialistExecutor
@@ -21,19 +22,33 @@ export class ExecuteHandler implements IStepHandler {
     return context.currentStep === FsmStep.EXECUTE;
   }
 
-  public async execute(task: TaskRecord, project: ProjectRecord, _storageEngine: LedgerStorageEngine): Promise<StepResult> {
-    const nextAttempt = (task.context.execution.attemptCount || 0) + 1;
-    if (nextAttempt > 3) {
-      return {
-        status: StepStatus.FATAL,
-        stateUpdates: { execution: { ...task.context.execution, attemptCount: nextAttempt, lastErrorLog: "Maximum attempts reached." } },
-        humanMessage: "Ralph has failed to execute the code after 3 attempts.",
-        nextStepOverride: null
-      };
+  public async execute(task: TaskRecord, project: ProjectRecord, storageEngine: LedgerStorageEngine): Promise<StepResult> {
+    const settings = await storageEngine.getSettings();
+    let specialist: WorkerSpecialist = task.context.execution.selectedWorker || 'gemini';
+    const instructions = task.context.execution.geminiPrompt || task.objective.title;
+
+    // Check for existing locks
+    const now = new Date().toISOString();
+    const activeLocks = (settings.quotaLocks || []).filter(lock => lock.disabledUntil > now);
+    
+    if (activeLocks.some(lock => lock.specialist === specialist)) {
+        console.log(`[ExecuteHandler] Specialist ${specialist} is currently locked out. Searching for alternative...`);
+        const available: WorkerSpecialist[] = ['gemini', 'copilot', 'opencode'];
+        const fallback = available.find(s => !activeLocks.some(lock => lock.specialist === s));
+        if (fallback) {
+            console.log(`[ExecuteHandler] Falling back to ${fallback}.`);
+            specialist = fallback;
+        } else {
+            return {
+                status: StepStatus.FATAL,
+                stateUpdates: {},
+                humanMessage: "All specialist workers are currently locked out due to quota limits.",
+                nextStepOverride: null
+            };
+        }
     }
 
-    const specialist: WorkerSpecialist = task.context.execution.selectedWorker || 'gemini';
-    const instructions = task.context.execution.geminiPrompt || task.objective.title;
+    console.log(`[ExecuteHandler] Dispatching work to ${specialist} (TaskId: ${task.id})...`);
 
     const prompt = `You are an expert engineer working in a local terminal.
 
@@ -65,18 +80,46 @@ Do NOT output the file contents in your response. The files should be modified o
       
       if (quotaMatch && quotaMatch[1]) {
         const waitTimeStr = quotaMatch[1];
+        const hMatch = waitTimeStr.match(/(\d+)h/);
+        const mMatch = waitTimeStr.match(/(\d+)m/);
+        const sMatch = waitTimeStr.match(/(\d+)s/);
+        const hVal = hMatch ? parseInt(hMatch[1] || '0') : 0;
+        const mVal = mMatch ? parseInt(mMatch[1] || '0') : 0;
+        const sVal = sMatch ? parseInt(sMatch[1] || '0') : 0;
+        const ms = (hVal * 3600 + mVal * 60 + sVal + 60) * 1000;
+        const until = new Date(Date.now() + ms).toISOString();
+        const currentLocks = settings.quotaLocks || [];
+
+        await storageEngine.updateSettings({
+            quotaLocks: [...currentLocks.filter(l => l.specialist !== 'gemini'), { specialist: 'gemini', reason: 'Quota Exhausted', disabledUntil: until }]
+        });
+        
         return {
           status: StepStatus.YIELD,
           stateUpdates: { 
               execution: { 
                   ...task.context.execution, 
-                  attemptCount: nextAttempt, // Don't burn attempts on quota limits
-                  lastErrorLog: `Quota exhausted. Waiting ${waitTimeStr}.` 
+                  lastErrorLog: `Quota exhausted. Lock set until ${until}` 
               } 
           },
-          humanMessage: `⚠️ **Rate Limit Hit:** ${specialist} quota exhausted. Must wait approximately ${waitTimeStr} before resuming. Task is paused.`,
-          nextStepOverride: FsmStep.EXECUTE // Stay on execute for when it resumes
+          humanMessage: `⚠️ **Rate Limit Hit:** ${specialist} quota exhausted. Persistent lock set until ${until}.`,
+          nextStepOverride: FsmStep.EXECUTE
         };
+      }
+
+      // Check for Copilot Quota
+      if (result.stderr.includes('You have no quota') || result.stderr.includes('402')) {
+          console.log(`[ExecuteHandler] Copilot quota hit. Locking until end of month.`);
+          const now = new Date();
+          const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+          const currentLocks = settings.quotaLocks || [];
+          try {
+              await storageEngine.updateSettings({
+                quotaLocks: [...currentLocks.filter(l => l.specialist !== 'copilot'), { specialist: 'copilot', reason: 'Out of Quota (402)', disabledUntil: endOfMonth }]
+              });
+          } catch (e) {
+              console.error(`[ExecuteHandler] Failed to set Copilot quota lock: ${e}`);
+          }
       }
 
       return {
@@ -84,7 +127,6 @@ Do NOT output the file contents in your response. The files should be modified o
         stateUpdates: { 
             execution: { 
                 ...task.context.execution, 
-                attemptCount: nextAttempt, 
                 lastErrorLog: result.stderr 
             } 
         },
@@ -98,7 +140,6 @@ Do NOT output the file contents in your response. The files should be modified o
       stateUpdates: { 
           execution: { 
               ...task.context.execution, 
-              attemptCount: nextAttempt, 
               activeWorkerId: specialist,
               specialistOutput: result.output
           } 

@@ -2,17 +2,18 @@ import { StateContext, TaskRecord, FsmStep, ProjectRecord } from '../../storage/
 import { StepResult, StepStatus } from '../types.js';
 import { IStepHandler } from './IStepHandler.js';
 import { WorkerManager } from '../../llm/WorkerManager.js';
-import { ILlmProvider } from '../../llm/types.js';
 import { PromptBuilder } from '../../llm/PromptBuilder.js';
 import { DiskTooling } from '../../storage/DiskTooling.js';
 import { LedgerStorageEngine } from '../../storage/LedgerStorageEngine.js';
 import { DockerRunner } from '../../remote/DockerRunner.js';
 import * as path from 'path';
 
+import { ProviderRegistry } from '../../llm/ProviderRegistry.js';
+
 export class VerifyHandler implements IStepHandler {
   constructor(
     _workerManager: WorkerManager,
-    _provider: ILlmProvider,
+    _providerRegistry: ProviderRegistry,
     _promptBuilder: PromptBuilder,
     _diskTooling: DiskTooling
   ) {}

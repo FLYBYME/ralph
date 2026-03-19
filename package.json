@@ -14,6 +14,7 @@
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
     "@types/blessed": "^0.1.27",
     "blessed": "^0.1.81",
     "chalk": "^5.6.2",
@@ -21,7 +22,8 @@
     "dockerode": "^4.0.9",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "ollama": "^0.5.12"
+    "ollama": "^0.5.12",
+    "openai": "^6.32.0"
   },
   "devDependencies": {
     "@types/dockerode": "^4.0.1",

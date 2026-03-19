@@ -27,7 +27,11 @@ export class TaskQueue {
 
     // 1. Filter out locked/blocked tasks
     const eligibleTasks = tasks.filter((task) => {
-      const isProcessable = task.status === 'OPEN' || task.status === 'IN_PROGRESS' || (task.status === 'AWAITING_REVIEW' && task.humanInputReceived);
+      const isProcessable = 
+        task.status === 'OPEN' || 
+        task.status === 'IN_PROGRESS' || 
+        (task.status === 'AWAITING_REVIEW' && task.humanInputReceived) ||
+        (task.status === 'PAUSED' && task.humanInputReceived);
       const isNotLocked = !task.resumeAfter || task.resumeAfter <= now;
       return isProcessable && isNotLocked;
     });

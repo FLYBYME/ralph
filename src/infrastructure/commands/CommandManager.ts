@@ -5,7 +5,7 @@ import { createLogger, Logger } from '../logging/Logger.js';
 import { pauseCommand, resumeCommand, resetCommand } from './handlers/CoreHandlers.js';
 import { findCommand, explainCommand } from './handlers/AnalysisHandlers.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
-import { ILlmProvider } from '../llm/types.js';
+import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 
 /**
  * CommandManager
@@ -19,7 +19,7 @@ export class CommandManager {
     private readonly storageEngine: LedgerStorageEngine,
     private readonly eventBus: LocalEventBus,
     private readonly workerManager: WorkerManager,
-    private readonly llmProvider: ILlmProvider
+    private readonly providerRegistry: ProviderRegistry
   ) {
     this.logger = createLogger('command', eventBus);
     this.register(pauseCommand);
@@ -91,7 +91,7 @@ export class CommandManager {
         storageEngine: this.storageEngine,
         eventBus: this.eventBus,
         workerManager: this.workerManager,
-        llmProvider: this.llmProvider
+        llmProvider: this.providerRegistry.getActiveProvider()
       };
       await command.execute(fullCtx, parsed.args);
       return true;
