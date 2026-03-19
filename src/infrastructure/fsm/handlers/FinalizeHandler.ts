@@ -4,13 +4,20 @@ import { IStepHandler } from './IStepHandler.js';
 import { GitRunner } from '../../remote/GitRunner.js';
 import { LedgerStorageEngine } from '../../storage/LedgerStorageEngine.js';
 import { IRemoteProvider } from '../../remote/types.js';
+import { WorkerManager } from '../../llm/WorkerManager.js';
+import { ProviderRegistry } from '../../llm/ProviderRegistry.js';
+import { execAsync } from '../../utils/exec.js';
 
 /**
  * FinalizeHandler
  * Responsibility: Stages, commits, pushes, and opens a PR after user approval.
  */
 export class FinalizeHandler implements IStepHandler {
-  constructor(private readonly remoteProvider: IRemoteProvider) {}
+  constructor(
+    private readonly remoteProvider: IRemoteProvider,
+    private readonly workerManager?: WorkerManager,
+    private readonly providerRegistry?: ProviderRegistry
+  ) {}
 
   public canExecute(context: StateContext): boolean {
     return context.currentStep === FsmStep.FINALIZE;
@@ -31,6 +38,29 @@ export class FinalizeHandler implements IStepHandler {
                 console.log(`[FinalizeHandler] Created and checked out branch ${newBranch}`);
             } catch (branchErr) {
                 console.warn(`[FinalizeHandler] Failed to create branch, continuing on current: ${branchErr}`);
+            }
+        }
+
+        // Generate Post-Mortem before committing (so diff is still available)
+        let postMortem = '';
+        if (this.workerManager && this.providerRegistry) {
+            try {
+                const [owner, repo] = project.name.split('/');
+                const diff = await this.remoteProvider.getDiff(owner || '', repo || project.name, task.id);
+                if (diff.trim()) {
+                    const model = this.providerRegistry.getActiveModel();
+                    const provider = this.providerRegistry.getActiveProvider();
+                    const payload = {
+                        systemPrompt: 'You are a Senior Engineer finalizing a task.',
+                        userPrompt: `Summarize what changed in 3 bullet points.\n\nOBJECTIVE:\n${task.objective.originalPrompt}\n\nDIFF:\n\`\`\`diff\n${diff}\n\`\`\``,
+                        contextFiles: []
+                    };
+                    const pmResponse = await this.workerManager.dispatch(payload, provider, model);
+                    postMortem = pmResponse.rawText || '';
+                    task.postMortem = postMortem;
+                }
+            } catch (pmErr) {
+                console.warn(`[FinalizeHandler] Failed to generate post-mortem: ${pmErr}`);
             }
         }
 
@@ -83,14 +113,14 @@ export class FinalizeHandler implements IStepHandler {
         return {
           status: StepStatus.SUCCESS,
           stateUpdates: {},
-          humanMessage: `🚀 **Task Finalized!** Ralph has committed the approved changes${pushStatus}.${prStatus}\n\n**Commit Details:**\n\`\`\`\n${commitResult}\n\`\`\``,
+          humanMessage: `🚀 **Task Finalized!** Ralph has committed the approved changes${pushStatus}.${prStatus}\n\n**Commit Details:**\n\`\`\`\n${commitResult}\n\`\`\`${postMortem ? `\n\n**Post-Mortem:**\n${postMortem}` : ''}`,
           nextStepOverride: null
         };
 
     } catch (error) {
         console.error(`[FinalizeHandler] Finalization failed: ${error}`);
         return {
-          status: StepStatus.FAILED,
+          status: StepStatus.FATAL,
           stateUpdates: {},
           humanMessage: `❌ **Finalization Failed:** An error occurred: ${error}`,
           nextStepOverride: FsmStep.AWAITING_REVIEW

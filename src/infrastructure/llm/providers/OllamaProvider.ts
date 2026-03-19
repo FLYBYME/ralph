@@ -71,7 +71,7 @@ export class OllamaProvider implements ILlmProvider {
       const request: ChatRequest & { stream: false } = {
         model: payload.model,
         messages,
-        format: payload.expectedOutputSchema as string | object,
+        format: payload.responseFormat ? 'json' : (payload.expectedOutputSchema as string | object),
         options: {
           temperature: 0,
           num_ctx: this.maxContextTokens
@@ -88,12 +88,25 @@ export class OllamaProvider implements ILlmProvider {
       const content = response.message.content;
       console.log(`${color('[ollama]', colors.green)} Response: ${content.slice(0, 500)}${content.length > 500 ? '...' : ''}`);
       
+      let parsed = undefined;
+      if (payload.responseFormat) {
+        try {
+          const clean = content.replace(/```json\n|```/g, '').trim();
+          const json = JSON.parse(clean);
+          parsed = payload.responseFormat.schema.parse(json);
+        } catch (e) {
+          console.error(`${color('[ollama]', colors.red)} Schema validation failed: ${e}`);
+          throw new Error(`Structured output validation failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
       if (response.prompt_eval_count || response.eval_count) {
         console.log(`${color('[ollama]', colors.magenta)} Usage: ${response.prompt_eval_count ?? 0} prompt tokens, ${response.eval_count ?? 0} completion tokens`);
       }
 
       return {
         rawText: content,
+        parsed,
         thinking: response.message.thinking,
         tool_calls: response.message.tool_calls as ToolCall[] | undefined,
         usage: {

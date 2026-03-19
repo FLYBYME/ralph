@@ -91,15 +91,33 @@ export class DockerRunner {
   }
 
   /**
-   * Clean up containers and images for a specific task.
+   * Clean up all containers and images managed by Ralph.
    */
-  public async cleanup(taskId: string): Promise<void> {
+  public async cleanupAll(): Promise<void> {
     try {
-      const container = this.docker.getContainer(`ralph-run-${taskId}`);
-      await container.remove({ force: true });
-      await this.docker.getImage(`ralph-ci-${taskId}`).remove({ force: true });
-    } catch {
-      // Ignore cleanup errors
+      const containers = await this.docker.listContainers({ all: true });
+      for (const containerInfo of containers) {
+        if (containerInfo.Names.some(name => name.includes('ralph-run-'))) {
+          const container = this.docker.getContainer(containerInfo.Id);
+          this.logger.warn(`Cleaning up orphaned container: ${containerInfo.Names.join(', ')}`);
+          await container.remove({ force: true });
+        }
+      }
+
+      const images = await this.docker.listImages();
+      for (const imageInfo of images) {
+        if (imageInfo.RepoTags?.some(tag => tag.includes('ralph-ci-'))) {
+          const image = this.docker.getImage(imageInfo.Id);
+          this.logger.warn(`Cleaning up orphaned image: ${imageInfo.RepoTags.join(', ')}`);
+          try {
+            await image.remove({ force: true });
+          } catch {
+            // Might be in use or already gone
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Global Docker cleanup failed: ${error}`);
     }
   }
 }

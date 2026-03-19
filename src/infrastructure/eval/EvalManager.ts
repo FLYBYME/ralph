@@ -2,11 +2,13 @@ import { LedgerStorageEngine } from '../storage/LedgerStorageEngine.js';
 import { LocalEventBus } from '../bus/LocalEventBus.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
 import { ProviderRegistry } from '../llm/ProviderRegistry.js';
+import { PromptBuilder, JudgeScorecardSchema } from '../llm/PromptBuilder.js';
 import { DockerRunner } from '../remote/DockerRunner.js';
-import { EvalResult, EvalStatus, FsmStep } from '../storage/types.js';
+import { EvalResult, FsmStep } from '../storage/types.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 
 export interface EvalScenario {
   id: string;
@@ -17,6 +19,8 @@ export interface EvalScenario {
   useTDD: boolean;
   expectedFiles: string[];
 }
+
+type Scorecard = z.infer<typeof JudgeScorecardSchema>;
 
 /**
  * EvalManager
@@ -30,7 +34,8 @@ export class EvalManager {
     private readonly storageEngine: LedgerStorageEngine,
     private readonly eventBus: LocalEventBus,
     private readonly workerManager: WorkerManager,
-    private readonly providerRegistry: ProviderRegistry
+    private readonly providerRegistry: ProviderRegistry,
+    private readonly promptBuilder: PromptBuilder
   ) {
     this.setupListeners();
   }
@@ -131,33 +136,22 @@ export class EvalManager {
         const judgeProvider = this.providerRegistry.getActiveProvider();
         const judgeModel = this.providerRegistry.getActiveModel();
         
-        const judgePrompt = `You are an expert code reviewer and judge. 
-Review the following task execution by an AI agent named Ralph.
+        const payload = this.promptBuilder.buildJudgePrompt(task, testsPassed, result.fsmSteps, judgeModel);
 
-TASK: ${task.objective.title}
-OBJECTIVE: ${task.objective.originalPrompt}
-TESTS PASSED: ${testsPassed ? 'YES' : 'NO'}
-FSM PATH: ${result.fsmSteps.join(' -> ')}
-
-Evaluate the quality, correctness, and adherence to TDD if applicable.
-Return a JSON object with:
-- score: number (0-100)
-- feedback: string
-- status: "PASSED" | "FAILED"`;
-
-        const judgeResponse = await this.workerManager.dispatch({
-            systemPrompt: "You are an impartial judge. Respond ONLY with valid JSON.",
-            userPrompt: judgePrompt,
-            contextFiles: []
-        }, judgeProvider, judgeModel);
-
-        let scorecard: { score: number, feedback: string, status: EvalStatus } = { score: 0, feedback: 'Failed to parse judge output', status: 'FAILED' };
+        let scorecard: Scorecard;
         try {
-            if (judgeResponse.rawText) {
-                scorecard = JSON.parse(judgeResponse.rawText);
-            }
+          const response = await this.workerManager.dispatch<Scorecard>(payload, judgeProvider, judgeModel);
+          if (!response.parsed) {
+            throw new Error("No parsed response from judge.");
+          }
+          scorecard = response.parsed;
         } catch (e) {
-            console.error('Failed to parse judge scorecard', e);
+          console.error('Failed to get judge scorecard', e);
+          scorecard = { 
+            score: 0, 
+            feedback: `Grading failed: ${e instanceof Error ? e.message : String(e)}`, 
+            status: 'FAILED' 
+          };
         }
 
         // 3. Finalize Result

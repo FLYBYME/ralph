@@ -143,10 +143,11 @@ export function createTaskRouter(deps: ServerDependencies): Router {
       const result = await deps.workerManager.reactDispatch({
         model: settings.ollamaModel,
         systemPrompt,
-        initialPrompt: message,
+        initialPrompt: req.body.prompt,
         provider: deps.ollamaProvider,
         tools: registry,
-        taskId: taskId,
+        maxIterations: settings.maxReActTurns || 20,
+        taskId: task.id,
         history
       });
 
@@ -290,6 +291,40 @@ export function createTaskRouter(deps: ServerDependencies): Router {
       const [owner, repo] = project.name.split('/');
       const logs = await deps.remoteProvider.getWorkflowLogs(owner || '', repo || project.name, req.params.id as any);
       res.type('text/plain').send(logs);
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  router.post('/:id/summary/backfill', async (req, res) => {
+    try {
+      const task = await deps.storageEngine.getTaskRecord(req.params.id);
+      const project = await deps.storageEngine.getProject(task.projectId);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+
+      const [owner, repo] = project.name.split('/');
+      const diff = await deps.remoteProvider.getDiff(owner || '', repo || project.name, task.id);
+      
+      if (!diff.trim()) {
+        return res.status(400).json({ error: 'No changes detected to summarize.' });
+      }
+
+      const model = deps.providerRegistry.getActiveModel();
+      const provider = deps.providerRegistry.getActiveProvider();
+      const payload = {
+          systemPrompt: 'You are a Senior Engineer summarizing a finished task.',
+          userPrompt: `Summarize what changed in 3 bullet points.\n\nOBJECTIVE:\n${task.objective.originalPrompt}\n\nDIFF:\n\`\`\`diff\n${diff}\n\`\`\``,
+          contextFiles: []
+      };
+      
+      const pmResponse = await deps.workerManager.dispatch(payload, provider, model);
+      const summary = pmResponse.rawText || '';
+
+      await deps.storageEngine.mutateTaskRecord(task.id, async (record) => {
+        record.postMortem = summary;
+      });
+
+      res.json({ success: true, summary });
     } catch (error) {
       res.status(500).json({ error: String(error) });
     }

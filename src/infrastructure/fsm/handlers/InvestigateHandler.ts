@@ -53,6 +53,7 @@ IMPORTANT: You must start by calling the 'listDirectory' tool to see what is in 
 
     const provider = this.providerRegistry.getActiveProvider();
     const model = this.providerRegistry.getActiveModel();
+    const settings = await storageEngine.getSettings();
 
     const result = await this.workerManager.reactDispatch({
         model,
@@ -60,6 +61,7 @@ IMPORTANT: You must start by calling the 'listDirectory' tool to see what is in 
         initialPrompt: userPrompt,
         provider,
         tools: registry,
+        maxIterations: settings.maxReActTurns || 20,
         taskId: task.id
     });
 

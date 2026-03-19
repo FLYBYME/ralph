@@ -1,7 +1,16 @@
+import { z } from 'zod';
 import { IAction, ActionParams, ActionResult } from './types.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
 import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { TaskResolver } from '../storage/TaskResolver.js';
+
+const TriageSchema = z.object({
+  category: z.enum(["bug", "enhancement", "question", "documentation", "other"]),
+  confidence: z.number().optional(),
+  reasoning: z.string()
+});
+
+type TriageResult = z.infer<typeof TriageSchema>;
 
 /**
  * TriageAction
@@ -24,42 +33,42 @@ export class TriageAction implements IAction {
       const title = resolved.title;
       const body = input || resolved.body || '';
 
-      const systemPrompt = `You are a senior software engineer performing GitHub issue triage. Analyze the issue and classify it.`;
+      const systemPrompt = `You are a senior software engineer performing GitHub issue triage. Analyze the issue and classify it.
+
+## FINAL OUTPUT FORMAT
+You MUST respond strictly with a JSON object matching this exact structure:
+{
+  "category": "<one of: bug, enhancement, question, documentation, other>",
+  "confidence": <float between 0.0 and 1.0>,
+  "reasoning": "<string explaining your classification>"
+}`;
       const userPrompt = `Issue Title: "${title}"\n\nIssue Body:\n${body}`;
 
-      const schema = {
-        type: "object",
-        properties: {
-          category: { type: "string", enum: ["bug", "enhancement", "question", "documentation", "other"] },
-          confidence: { type: "number" },
-          reasoning: { type: "string" }
-        },
-        required: ["category", "reasoning"]
-      };
-
-      // In TriageAction, we don't have easy access to settings here without passing storageEngine
-      // For now, using a default or we should have passed it.
-      // Better: let's use 'llama3' as a placeholder or fix the constructor.
-      // Actually, let's just assume the provider might have a default or we pass it in params.
-      // TO BE SAFE: I'll use 'llama3' but this should be improved.
       const provider = this.providerRegistry.getActiveProvider();
       const model = this.providerRegistry.getActiveModel();
 
-      const payload: any = { // payload might need adjustment for expectedOutputSchema
+      const payload = {
         systemPrompt,
         userPrompt,
         contextFiles: [],
-        expectedOutputSchema: schema
+        responseFormat: {
+          schema: TriageSchema,
+          name: "triage"
+        }
       };
 
-      const response = await this.workerManager.dispatch(payload, provider, model);
-      const result = JSON.parse(response.rawText || '{}');
+      const response = await this.workerManager.dispatch<TriageResult>(payload, provider, model);
+      const result = response.parsed;
+
+      if (!result) {
+        throw new Error("Triage failed: No parsed response from provider.");
+      }
 
       return {
         success: true,
         taskId: '',
         message: `Triage complete: ${result.category} (${Math.round((result.confidence || 0) * 100)}% confidence)`,
-        data: result
+        data: result as any
       };
     } catch (error) {
       return {

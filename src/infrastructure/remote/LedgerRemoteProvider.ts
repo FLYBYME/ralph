@@ -11,10 +11,7 @@ import { DiskTooling } from '../storage/DiskTooling.js';
 import { DockerRunner } from './DockerRunner.js';
 import * as path from 'path';
 import * as fs from 'node:fs/promises';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execAsync = promisify(exec);
+import { execAsync, execFileAsync } from '../../utils/exec.js';
 
 /**
  * LedgerRemoteProvider
@@ -63,7 +60,7 @@ export class LedgerRemoteProvider implements IRemoteProvider {
     const repoInfo = await this.fetchRepository(owner, repo);
     const cwd = repoInfo.url.replace('local://', '');
     try {
-      const { stdout } = await execAsync(`grep -rlI "${query}" . --exclude-dir=node_modules`, { cwd });
+      const { stdout } = await execFileAsync('grep', ['-rlI', query, '.', '--exclude-dir=node_modules'], { cwd });
       return stdout.trim().split('\n').filter(Boolean);
     } catch {
       return [];
@@ -74,7 +71,7 @@ export class LedgerRemoteProvider implements IRemoteProvider {
     const repoInfo = await this.fetchRepository(owner, repo);
     const cwd = repoInfo.url.replace('local://', '');
     try {
-      await execAsync(`git rev-parse --verify ${name}`, { cwd });
+      await execFileAsync('git', ['rev-parse', '--verify', name], { cwd });
       return true;
     } catch {
       return false;
@@ -84,11 +81,11 @@ export class LedgerRemoteProvider implements IRemoteProvider {
   public async deleteBranch(owner: string, repo: string, name: string): Promise<void> {
     const repoInfo = await this.fetchRepository(owner, repo);
     const cwd = repoInfo.url.replace('local://', '');
-    await execAsync(`git branch -D ${name}`, { cwd });
+    await execFileAsync('git', ['branch', '-D', name], { cwd });
   }
 
   public async cloneRepository(_owner: string, _repo: string, url: string, targetPath: string): Promise<void> {
-    await execAsync(`git clone ${url} ${targetPath}`);
+    await execFileAsync('git', ['clone', url, targetPath]);
   }
 
   // ─── Issue Management ────────────────────────────────────────────────────
@@ -153,7 +150,8 @@ export class LedgerRemoteProvider implements IRemoteProvider {
     return { number: Date.now(), url: `local://pr/${head}` };
   }
 
-  public async fetchPullRequest(_owner: string, _repo: string, prNumber: number): Promise<RemotePullRequest> {
+  public async fetchPullRequest(owner: string, repo: string, prNumber: number): Promise<RemotePullRequest> {
+    const repoInfo = await this.fetchRepository(owner, repo);
     return {
       number: prNumber,
       title: 'Local PR',
@@ -165,7 +163,7 @@ export class LedgerRemoteProvider implements IRemoteProvider {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       headRef: 'feature',
-      baseRef: 'main',
+      baseRef: repoInfo.defaultBranch || 'main',
       merged: false,
       draft: false
     };
@@ -174,6 +172,7 @@ export class LedgerRemoteProvider implements IRemoteProvider {
   public async getDiff(owner: string, repo: string, ref: string | number): Promise<string> {
     const repoInfo = await this.fetchRepository(owner, repo);
     const cwd = repoInfo.url.replace('local://', '');
+    const defaultBranch = repoInfo.defaultBranch || 'main';
 
     if (typeof ref === 'string' && ref.length > 0) {
         try {
@@ -187,7 +186,7 @@ export class LedgerRemoteProvider implements IRemoteProvider {
             // If we have specific target files in the plan, filter the diff to those files
             const targetFiles = task.context.planning?.targetFiles || [];
             if (targetFiles.length > 0) {
-                const { stdout } = await execAsync(`git diff main -- ${targetFiles.join(' ')}`, { cwd });
+                const { stdout } = await execFileAsync('git', ['diff', defaultBranch, '--', ...targetFiles], { cwd });
                 return stdout || `No changes detected in target files: ${targetFiles.join(', ')}`;
             }
         } catch (err) {
@@ -196,13 +195,14 @@ export class LedgerRemoteProvider implements IRemoteProvider {
         }
     }
 
-    const { stdout } = await execAsync(`git diff main`, { cwd });
+    const { stdout } = await execFileAsync('git', ['diff', defaultBranch], { cwd });
     return stdout;
   }
 
   public async getModifiedFiles(owner: string, repo: string, ref: string | number): Promise<string[]> {
     const repoInfo = await this.fetchRepository(owner, repo);
     const cwd = repoInfo.url.replace('local://', '');
+    const defaultBranch = repoInfo.defaultBranch || 'main';
 
     if (typeof ref === 'string' && ref.length > 0) {
         try {
@@ -215,13 +215,13 @@ export class LedgerRemoteProvider implements IRemoteProvider {
 
             const targetFiles = task.context.planning?.targetFiles || [];
             if (targetFiles.length > 0) {
-                const { stdout } = await execAsync(`git diff --name-only main -- ${targetFiles.join(' ')}`, { cwd });
+                const { stdout } = await execFileAsync('git', ['diff', '--name-only', defaultBranch, '--', ...targetFiles], { cwd });
                 return stdout.trim().split('\n').filter(Boolean);
             }
         } catch {}
     }
 
-    const { stdout } = await execAsync(`git diff --name-only main`, { cwd });
+    const { stdout } = await execFileAsync('git', ['diff', '--name-only', defaultBranch], { cwd });
     return stdout.trim().split('\n').filter(Boolean);
   }
 
@@ -279,5 +279,9 @@ export class LedgerRemoteProvider implements IRemoteProvider {
     const projectPath = repoInfo.url.replace('local://', '');
     const logPath = path.join(process.cwd(), 'data', 'logs', `ci-${ref}.log`);
     void this.dockerRunner.runWorkflow(projectPath, String(ref), logPath);
+  }
+
+  public async cleanup(): Promise<void> {
+    await this.dockerRunner.cleanupAll();
   }
 }

@@ -71,7 +71,7 @@ export class VerifyFailHandler implements IStepHandler {
 
     } catch (error) {
          return {
-            status: StepStatus.FAILED,
+            status: StepStatus.FATAL,
             stateUpdates: { verification: { ...task.context.verification, testOutput: String(error) } },
             humanMessage: `TDD verification process crashed: ${error}`,
             nextStepOverride: FsmStep.WRITE_TESTS

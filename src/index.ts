@@ -66,13 +66,12 @@ async function main() {
     if (first) providerRegistry.setActiveProvider(first.providerId);
   }
 
-  const workerManager = new WorkerManager(eventBus);
+  const workerManager = new WorkerManager(eventBus, storageEngine);
   const promptBuilder = new PromptBuilder();
   const commandManager = new CommandManager(storageEngine, eventBus, workerManager, providerRegistry);
   const contextAnalyzer = new ContextAnalyzer(workerManager, providerRegistry, promptBuilder, commandManager);
   const specialistExecutor = new SpecialistExecutor(eventBus, storageEngine);
-  const evalManager = new EvalManager(storageEngine, eventBus, workerManager, providerRegistry);
-
+  const evalManager = new EvalManager(storageEngine, eventBus, workerManager, providerRegistry, promptBuilder);
   // 2. Actions & Remote Setup
   const remoteProvider = new LedgerRemoteProvider(storageEngine, diskTooling);
   const taskResolver = new TaskResolver(storageEngine, remoteProvider);
@@ -109,6 +108,7 @@ async function main() {
     fsm,
     workerManager,
     providerRegistry,
+    remoteProvider,
     contextAnalyzer,
     janitorService
   );
@@ -163,13 +163,29 @@ async function main() {
     }
   });
 
-  eventBus.subscribe('TOOL_CALL', (event) => {
+  eventBus.subscribe('TOOL_CALL', async (event) => {
     if (event.type === 'TOOL_CALL') {
       const statusIcon = event.result.success ? '✔' : '✖';
       const argsStr = JSON.stringify(event.args);
       const shortOutput = event.result.output.slice(0, 150).replace(/\n/g, '\\n') + (event.result.output.length > 150 ? '...' : '');
       logger.info(`[tool:${event.toolName}] ${statusIcon} args: ${argsStr}`, event.taskId);
       logger.debug(`[tool:${event.toolName}:result] ${shortOutput}`, event.taskId);
+      
+      try {
+        const taskRecord = await storageEngine.getTaskRecord(event.taskId);
+        if (!taskRecord.toolCalls) {
+          taskRecord.toolCalls = [];
+        }
+        taskRecord.toolCalls.push({
+          toolName: event.toolName,
+          args: event.args,
+          result: { success: event.result.success, output: event.result.output },
+          timestamp: event.timestamp
+        });
+        await storageEngine.commitTaskRecord(taskRecord);
+      } catch (err) {
+        // Task might not exist yet if it's a global tool call, ignore safely.
+      }
     }
   });
 

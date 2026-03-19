@@ -71,7 +71,7 @@ export class VerifyHandler implements IStepHandler {
 
     } catch (error) {
          return {
-            status: StepStatus.FAILED,
+            status: StepStatus.FATAL,
             stateUpdates: { verification: { ...task.context.verification, lintPassed: false, testOutput: String(error) } },
             humanMessage: `Verification process crashed: ${error}`,
             nextStepOverride: FsmStep.EXECUTE

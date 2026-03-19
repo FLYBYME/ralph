@@ -42,7 +42,7 @@ export class FiniteStateMachine {
     this.handlers.set(FsmStep.VERIFY, new VerifyHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.SELF_REVIEW, new SelfReviewHandler(workerManager, providerRegistry, promptBuilder, remoteProvider));
     this.handlers.set(FsmStep.AWAITING_REVIEW, new ReviewHandler());
-    this.handlers.set(FsmStep.FINALIZE, new FinalizeHandler(remoteProvider));
+    this.handlers.set(FsmStep.FINALIZE, new FinalizeHandler(remoteProvider, workerManager, providerRegistry));
   }
 
   /**
@@ -69,6 +69,8 @@ export class FiniteStateMachine {
    * Applies the step result to the task's memory, updates status, and advances currentStep.
    */
   public applyTransition(task: TaskRecord, result: StepResult): void {
+    const oldStep = task.context.currentStep || FsmStep.INVESTIGATE;
+
     // 1. Merge incremental memory updates (append-aware)
     this.mergeMemory(task.context, result.stateUpdates);
 
@@ -84,6 +86,37 @@ export class FiniteStateMachine {
       task.context.currentStep = FsmStep.AWAITING_REVIEW;
     }
     // Note: On StepStatus.FAILED without override, currentStep remains the same (retry loop)
+
+    // FSM Timeline tracking
+    if (!task.timeline) task.timeline = [];
+    let lastEvent = task.timeline[task.timeline.length - 1];
+
+    if (!lastEvent || lastEvent.step !== oldStep || lastEvent.status === 'SUCCESS' || lastEvent.status === 'FAILED' || lastEvent.status === 'FATAL') {
+      lastEvent = {
+        step: oldStep,
+        status: result.status,
+        details: '1 turn',
+        timestamp: new Date().toISOString()
+      };
+      task.timeline.push(lastEvent);
+    } else {
+      const match = lastEvent.details.match(/(\d+) turn/);
+      if (match && match[1]) {
+        lastEvent.details = `${parseInt(match[1]) + 1} turns`;
+      }
+    }
+
+    lastEvent.status = result.status;
+    lastEvent.timestamp = new Date().toISOString();
+
+    if (oldStep === FsmStep.EXECUTE && result.status === 'SUCCESS') {
+      lastEvent.details = `${task.context.planning?.subTasks?.length || 0} sub-tasks`;
+    }
+    if (result.status === 'FAILED' || result.status === 'FATAL') {
+      let msg = result.humanMessage || 'Unknown error';
+      if (msg.length > 50) msg = msg.slice(0, 47) + '...';
+      lastEvent.details = `Failed: "${msg.replace(/\n/g, ' ')}"`;
+    }
 
     // 3. Record human communication in task thread
     if (result.humanMessage) {

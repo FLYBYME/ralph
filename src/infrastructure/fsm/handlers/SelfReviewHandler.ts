@@ -1,10 +1,13 @@
+import { z } from 'zod';
 import { StateContext, TaskRecord, FsmStep, ProjectRecord } from '../../storage/types.js';
 import { StepResult, StepStatus } from '../types.js';
 import { IStepHandler } from './IStepHandler.js';
 import { WorkerManager } from '../../llm/WorkerManager.js';
 import { ProviderRegistry } from '../../llm/ProviderRegistry.js';
-import { PromptBuilder } from '../../llm/PromptBuilder.js';
+import { PromptBuilder, SelfReviewSchema } from '../../llm/PromptBuilder.js';
 import { IRemoteProvider } from '../../remote/types.js';
+
+type Review = z.infer<typeof SelfReviewSchema>;
 
 /**
  * SelfReviewHandler
@@ -41,17 +44,22 @@ export class SelfReviewHandler implements IStepHandler {
         const model = this.providerRegistry.getActiveModel();
         const provider = this.providerRegistry.getActiveProvider();
         const payload = this.promptBuilder.buildSelfReviewPrompt(task, diff, model);
-        const response = await this.workerManager.dispatch(payload, provider, model);
-
-        let review: any = null;
+        
+        let review: Review;
         try {
-            if (response.rawText) {
-                // Strip markdown JSON block if present (common LLM failure mode)
-                const cleanJson = response.rawText.replace(/```json\n|```/g, '').trim();
-                review = JSON.parse(cleanJson);
-            }
+          const response = await this.workerManager.dispatch<Review>(payload, provider, model);
+          if (!response.parsed) {
+            throw new Error("No parsed response from provider.");
+          }
+          review = response.parsed;
         } catch (e) {
-            console.error("[SelfReviewHandler] Failed to parse review JSON result:", e);
+          console.error("[SelfReviewHandler] Failed to parse review JSON result:", e);
+          return {
+            status: StepStatus.FAILED,
+            stateUpdates: {},
+            humanMessage: "Ralph failed to generate a valid self-review result. Retrying.",
+            nextStepOverride: null
+          };
         }
 
         if (!review) {
@@ -92,7 +100,7 @@ export class SelfReviewHandler implements IStepHandler {
     } catch (error) {
         console.error(`[SelfReviewHandler] Error: ${error}`);
         return {
-          status: StepStatus.FAILED,
+          status: StepStatus.FATAL,
           stateUpdates: {},
           humanMessage: `⚠️ Self-review execution crashed: ${error}`,
           nextStepOverride: null

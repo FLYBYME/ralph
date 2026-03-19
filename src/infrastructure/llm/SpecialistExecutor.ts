@@ -42,12 +42,22 @@ export class SpecialistExecutor {
     prompt: string,
     opts: WorkerOptions = {}
   ): Promise<WorkerResult> {
-    const timeoutMs = opts.timeoutMs ?? 180_000; // 3 min default
+    const settings = await this.storageEngine.getSettings();
+    const timeoutMs = opts.timeoutMs ?? settings.specialistTimeoutMs ?? 300000;
     const taskId = opts.taskId || 'unknown-task';
     const activity = opts.activity || `Executing ${specialist} task`;
     const startTime = Date.now();
 
-    const settings = await this.storageEngine.getSettings();
+    // Check if specialist is enabled
+    if (specialist === 'gemini' && settings.workerGeminiEnabled === false) {
+      return { success: false, output: '', exitCode: -1, stderr: 'Gemini specialist is disabled in settings.' };
+    }
+    if (specialist === 'copilot' && settings.workerCopilotEnabled === false) {
+      return { success: false, output: '', exitCode: -1, stderr: 'Copilot specialist is disabled in settings.' };
+    }
+    if (specialist === 'opencode' && settings.workerOpencodeEnabled === false) {
+      return { success: false, output: '', exitCode: -1, stderr: 'Opencode specialist is disabled in settings.' };
+    }
 
     this.eventBus.publish({
       type: 'SPECIALIST_START',
@@ -62,7 +72,7 @@ export class SpecialistExecutor {
     switch (specialist) {
       case 'gemini':
         cmd = 'gemini';
-        args = ['--prompt', prompt, '--yolo', ...(settings.workerGeminiModel ? ['--model', settings.workerGeminiModel] : [])];
+        args = ['--prompt', prompt, '--yolo', '--resume', ...(settings.workerGeminiModel ? ['--model', settings.workerGeminiModel] : [])];
         break;
       case 'copilot':
         cmd = 'copilot';
@@ -125,7 +135,7 @@ export class SpecialistExecutor {
         clearTimeout(timeout);
         const exitCode = code ?? -1;
         const durationMs = Date.now() - startTime;
-        
+
         this.logger.info(`Finished with exit code ${exitCode} (${durationMs}ms)`, taskId);
         this.emitComplete(taskId, specialist, durationMs);
 

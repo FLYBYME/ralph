@@ -139,6 +139,7 @@ export interface AppSettings {
   workerOpencodeModel: string;
   maxBacklog: number;
   maxIterations: number;
+  maxReActTurns: number;
   providers: ProviderConfig[];
   activeProviderId: string;
   quotaLocks?: QuotaLock[];
@@ -146,6 +147,8 @@ export interface AppSettings {
   janitorIntervalHours: number;
   janitorCooldownHours: number;
   tddModeEnabled: boolean;
+  llmTimeoutMs: number;
+  specialistTimeoutMs: number;
 }
 
 export interface QuotaLock {
@@ -200,6 +203,20 @@ export interface KnowledgeEntry {
   relatedEntries: string[]; // Array of IDs
 }
 
+export interface FsmTimelineEvent {
+  step: FsmStep;
+  status: 'SUCCESS' | 'FAILED' | 'YIELD' | 'FATAL';
+  details: string;
+  timestamp: string;
+}
+
+export interface ToolCallEvent {
+  toolName: string;
+  args: any;
+  result: { success: boolean; output: string };
+  timestamp: string;
+}
+
 export interface TaskRecord {
   id: string;
   projectId: string;
@@ -214,6 +231,9 @@ export interface TaskRecord {
   assignees: string[];
   milestone?: string | undefined;
   isEval?: boolean;
+  timeline?: FsmTimelineEvent[];
+  toolCalls?: ToolCallEvent[];
+  postMortem?: string;
 }
 
 export interface AuditLogEntry {

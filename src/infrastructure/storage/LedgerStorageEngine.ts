@@ -133,11 +133,14 @@ export class LedgerStorageEngine {
       workerOpencodeModel: process.env.OPENCODE_MODEL || '',
       maxBacklog: parseInt(process.env.MAX_BACKLOG || '200', 10),
       maxIterations: parseInt(process.env.MAX_ITERATIONS || '10', 10),
+      maxReActTurns: parseInt(process.env.MAX_REACT_TURNS || '20', 10),
       activeProviderId: process.env.ACTIVE_LLM_PROVIDER || 'ollama-local',
       janitorEnabled: process.env.JANITOR_ENABLED === 'true',
       janitorIntervalHours: parseInt(process.env.JANITOR_INTERVAL_HOURS || '1', 10),
       janitorCooldownHours: parseInt(process.env.JANITOR_COOLDOWN_HOURS || '24', 10),
       tddModeEnabled: process.env.TDD_MODE_ENABLED === 'true',
+      llmTimeoutMs: parseInt(process.env.LLM_TIMEOUT_MS || '60000', 10),
+      specialistTimeoutMs: parseInt(process.env.SPECIALIST_TIMEOUT_MS || '300000', 10),
       providers: [
         {
           id: 'ollama-local',

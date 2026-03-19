@@ -82,6 +82,7 @@ export function createChatRouter(deps: ServerDependencies): Router {
         initialPrompt: message,
         provider: deps.ollamaProvider,
         tools: registry,
+        maxIterations: settings.maxReActTurns || 20,
         taskId: `chat-${sessionId.slice(0, 8)}`,
         history
       });

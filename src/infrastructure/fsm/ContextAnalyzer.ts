@@ -1,14 +1,17 @@
 import { TaskRecord, FsmStep, ProjectRecord } from '../storage/types.js';
 import { ProviderRegistry } from '../llm/ProviderRegistry.js';
-import { PromptBuilder } from '../llm/PromptBuilder.js';
+import { PromptBuilder, ContextAnalysisSchema } from '../llm/PromptBuilder.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
 import { CommandManager } from '../commands/CommandManager.js';
+import { z } from 'zod';
 import * as crypto from 'crypto';
 import { colors, color, dim } from '../../utils/colors.js';
 
 export interface AnalysisResult {
   interrupted: boolean;
 }
+
+type Analysis = z.infer<typeof ContextAnalysisSchema>;
 
 /**
  * ContextAnalyzer
@@ -72,16 +75,16 @@ export class ContextAnalyzer {
     const payload = this.promptBuilder.buildContextAnalysisPrompt(task, conversationHistory, lastHuman.body, model);
     
     // We expect a JSON response back
-    const response = await this.workerManager.dispatch(payload, provider, model);
-    
-    let analysis: any = null;
+    let analysis: Analysis;
     try {
-        if (response.rawText) {
-            analysis = JSON.parse(response.rawText);
-        }
+      const response = await this.workerManager.dispatch<Analysis>(payload, provider, model);
+      if (!response.parsed) {
+        throw new Error("No parsed response from provider.");
+      }
+      analysis = response.parsed;
     } catch (e) {
-        console.warn(`${color('[analyzer:warn]', colors.yellow)} Failed to parse LLM intent JSON.`, e);
-        return { interrupted: false };
+      console.warn(`${color('[analyzer:warn]', colors.yellow)} Failed to parse LLM intent JSON.`, e);
+      return { interrupted: false };
     }
 
     if (!analysis || !analysis.intent) {

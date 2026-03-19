@@ -203,6 +203,136 @@ export const taskLogsCommand: CommandDefinition = {
   }
 };
 
+export const taskPathCommand: CommandDefinition = {
+  name: 'task:path',
+  description: 'View the visual FSM timeline for a task',
+  aliases: ['path'],
+  category: 'task',
+  args: [
+    { name: 'id', description: 'Task ID', required: true }
+  ],
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const taskId = ctx.args.id as string;
+    try {
+      const task = await ctx.client.getTask(taskId);
+      if (!task.timeline || task.timeline.length === 0) {
+        return { success: true, text: 'No timeline events found for this task.' };
+      }
+
+      let output = `${chalk.bold.blue('FSM Timeline')} for ${chalk.cyan(taskId)}\n\n`;
+      for (const event of task.timeline) {
+        let icon = chalk.gray('[ ]');
+        if (event.status === 'SUCCESS') icon = chalk.green('[✔]');
+        else if (event.status === 'FAILED' || event.status === 'FATAL') icon = chalk.red('[!]');
+        else if (event.status === 'YIELD') icon = chalk.yellow('[↺]');
+
+        output += `${icon} ${chalk.bold(event.step.padEnd(15))} ${chalk.dim(`(${event.details})`)}\n`;
+      }
+
+      return { success: true, text: output };
+    } catch (err: any) {
+      return { success: false, message: `Failed to fetch task path: ${err.message}` };
+    }
+  }
+};
+
+export const taskImpactCommand: CommandDefinition = {
+  name: 'task:impact',
+  description: 'View the Disk Manifest of tools that successfully modified the filesystem or ran commands',
+  aliases: ['impact'],
+  category: 'task',
+  args: [
+    { name: 'id', description: 'Task ID', required: true }
+  ],
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const taskId = ctx.args.id as string;
+    try {
+      const task = await ctx.client.getTask(taskId);
+      if (!task.toolCalls || task.toolCalls.length === 0) {
+        return { success: true, text: 'No tool impact recorded for this task.' };
+      }
+
+      const filesCreated = new Set<string>();
+      const filesModified = new Set<string>();
+      const commandsRun: string[] = [];
+
+      for (const call of task.toolCalls) {
+        if (!call.result.success) continue;
+
+        const name = call.toolName;
+        const args = call.args || {};
+
+        if (name === 'writeFile' || name === 'createFile') {
+          if (args.path) filesCreated.add(args.path);
+        } else if (name === 'replaceText' || name === 'editFile' || name === 'patchFile') {
+          if (args.path) filesModified.add(args.path);
+        } else if (name === 'runCommand' || name === 'executeShell' || name === 'exec') {
+          if (args.command) commandsRun.push(`${args.command}\n  ${chalk.dim(call.result.output.trim().split('\\n')[0])}`);
+        }
+      }
+
+      let output = `${chalk.bold.blue('Tool Impact Audit')} for ${chalk.cyan(taskId)}\n\n`;
+      
+      if (filesCreated.size > 0) {
+        output += `${chalk.bold.green('FILES CREATED:')}\n`;
+        filesCreated.forEach(f => output += `- ${f}\n`);
+        output += '\n';
+      }
+      
+      if (filesModified.size > 0) {
+        output += `${chalk.bold.yellow('FILES MODIFIED:')}\n`;
+        filesModified.forEach(f => output += `- ${f}\n`);
+        output += '\n';
+      }
+
+      if (commandsRun.length > 0) {
+        output += `${chalk.bold.magenta('COMMANDS RUN:')}\n`;
+        commandsRun.forEach(c => output += `- ${c}\n`);
+        output += '\n';
+      }
+
+      if (filesCreated.size === 0 && filesModified.size === 0 && commandsRun.length === 0) {
+        output += chalk.dim('No file modifications or command executions were recorded.');
+      }
+
+      return { success: true, text: output.trim() };
+    } catch (err: any) {
+      return { success: false, message: `Failed to fetch tool impact: ${err.message}` };
+    }
+  }
+};
+
+export const taskSummaryCommand: CommandDefinition = {
+  name: 'task:summary',
+  description: 'View the Autonomous Post-Mortem summary for a finalized task',
+  aliases: ['summary'],
+  category: 'task',
+  args: [
+    { name: 'id', description: 'Task ID', required: true }
+  ],
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const taskId = ctx.args.id as string;
+    try {
+      let task = await ctx.client.getTask(taskId);
+      
+      if (!task.postMortem) {
+        if (task.status === 'COMPLETED') {
+          console.log(chalk.yellow('Summary missing for completed task. Triggering backfill...'));
+          const backfill = await ctx.client.backfillSummary(taskId);
+          task.postMortem = backfill.summary;
+        } else {
+          return { success: true, text: 'No post-mortem summary available for this task. It may not be finalized yet.' };
+        }
+      }
+
+      const output = `${chalk.bold.blue('Autonomous Post-Mortem')} for ${chalk.cyan(taskId)}\n\n${chalk.white(task.postMortem)}`;
+      return { success: true, text: output };
+    } catch (err: any) {
+      return { success: false, message: `Failed to fetch task summary: ${err.message}` };
+    }
+  }
+};
+
 export const taskReviewCommand: CommandDefinition = {
   name: 'task:review',
   description: 'Submit feedback/instructions for a task',
@@ -258,6 +388,9 @@ registry.register(taskListCommand);
 registry.register(taskSolveCommand);
 registry.register(taskApproveCommand);
 registry.register(taskDiffCommand);
+registry.register(taskPathCommand);
+registry.register(taskImpactCommand);
+registry.register(taskSummaryCommand);
 registry.register(taskLogsCommand);
 registry.register(taskReviewCommand);
 registry.register(taskRejectCommand);

@@ -43,7 +43,24 @@ export class ExecuteHandler implements IStepHandler {
         t.dependsOn.every(depId => completedIds.includes(depId))
     );
 
-    if (availableTasks.length === 0 && subTasks.some(t => t.status !== 'COMPLETED')) {
+    const allFinished = subTasks.every(t => t.status === 'COMPLETED');
+
+    if (allFinished) {
+        // All tasks are completed!
+        return {
+            status: StepStatus.SUCCESS,
+            stateUpdates: {
+                execution: {
+                    ...task.context.execution,
+                    specialistOutput: subTasks.map(t => `### Task: ${t.id} [${t.worker}]\n${t.result}`).join('\n\n')
+                }
+            },
+            humanMessage: `🚀 **Swarm Execution Complete.** All ${subTasks.length} sub-tasks have been applied successfully.`,
+            nextStepOverride: null
+        };
+    }
+
+    if (availableTasks.length === 0) {
         // We have unfinished tasks but none are available (deadlock or waiting)
         const failedTasks = subTasks.filter(t => t.status === 'FAILED');
         if (failedTasks.length > 0) {
@@ -63,40 +80,34 @@ export class ExecuteHandler implements IStepHandler {
         };
     }
 
-    if (availableTasks.length === 0) {
-        // All tasks are completed!
-        return {
-            status: StepStatus.SUCCESS,
-            stateUpdates: {
-                execution: {
-                    ...task.context.execution,
-                    specialistOutput: subTasks.map(t => `### Task: ${t.id} [${t.worker}]\n${t.result}`).join('\n\n')
-                }
-            },
-            humanMessage: `🚀 **Swarm Execution Complete.** All ${subTasks.length} sub-tasks have been applied successfully.`,
-            nextStepOverride: null
-        };
-    }
-
     // For now, let's process the first available task (sequential Foreman)
     const currentTask = availableTasks[0]!;
     let specialist: WorkerSpecialist = (currentTask.worker as WorkerSpecialist) || 'gemini';
     const settings = await storageEngine.getSettings();
 
+    // Determine actually enabled workers
+    const enabledWorkers: WorkerSpecialist[] = [];
+    if (settings.workerGeminiEnabled !== false) enabledWorkers.push('gemini');
+    if (settings.workerCopilotEnabled !== false) enabledWorkers.push('copilot');
+    if (settings.workerOpencodeEnabled !== false) enabledWorkers.push('opencode');
+
     // Specialists Lock-out check
     const now = new Date().toISOString();
     const activeLocks = (settings.quotaLocks || []).filter(lock => lock.disabledUntil > now);
-    if (activeLocks.some(lock => lock.specialist === specialist)) {
-        const available: WorkerSpecialist[] = ['gemini', 'copilot', 'opencode'];
-        const fallback = available.find(s => !activeLocks.some(lock => lock.specialist === s));
+    const lockedWorkers = activeLocks.map(l => l.specialist);
+
+    const isAvailable = (s: WorkerSpecialist) => enabledWorkers.includes(s) && !lockedWorkers.includes(s);
+
+    if (!isAvailable(specialist)) {
+        const fallback = enabledWorkers.find(s => isAvailable(s));
         if (fallback) {
-            console.log(`[ExecuteHandler] Specialist ${specialist} locked. Falling back to ${fallback} for sub-task ${currentTask.id}.`);
+            console.log(`[ExecuteHandler] Specialist ${specialist} is unavailable (disabled or locked). Falling back to ${fallback} for sub-task ${currentTask.id}.`);
             specialist = fallback;
         } else {
              return {
                 status: StepStatus.YIELD,
                 stateUpdates: {},
-                humanMessage: `All specialists locked. Waiting to resume sub-task ${currentTask.id}.`,
+                humanMessage: `No specialists are currently available (all disabled or locked). Waiting to resume sub-task ${currentTask.id}.`,
                 nextStepOverride: FsmStep.EXECUTE
             };
         }
@@ -119,7 +130,8 @@ Brief summary of changes made. Do NOT output files.`;
     const result = await this.specialistExecutor.execute(specialist, prompt, {
       cwd: project.absolutePath,
       taskId: task.id,
-      activity: `Foreman: Running sub-task ${currentTask.id} (${currentTask.instructions})`
+      activity: `Foreman: Running sub-task ${currentTask.id} (${currentTask.instructions})`,
+      timeoutMs: settings.specialistTimeoutMs
     });
 
     // Update the record for this sub-task

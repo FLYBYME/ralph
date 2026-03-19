@@ -1,8 +1,15 @@
+import { z } from 'zod';
+
 export type JsonValue = string | number | boolean | null | { [key: string]: JsonValue } | JsonValue[];
 
 export interface FileContext {
   path: string;
   content: string;
+}
+
+export interface StructuredOutputConfig {
+  schema: z.ZodType<any>;
+  name: string;
 }
 
 export interface WorkerTool {
@@ -49,12 +56,14 @@ export interface WorkerPayload {
   userPrompt: string;
   messages?: LlmMessage[];
   contextFiles: FileContext[];
-  expectedOutputSchema?: JsonValue; // JSON Schema or Zod
+  expectedOutputSchema?: JsonValue; // JSON Schema (legacy)
+  responseFormat?: StructuredOutputConfig; // New: Zod schema
   tools?: WorkerTool[] | undefined;
 }
 
-export interface WorkerResponse {
+export interface WorkerResponse<T = any> {
   rawText?: string;
+  parsed?: T; // New: Type-safe result from provider
   thinking?: string | undefined;
   tool_calls?: ToolCall[] | undefined;
   usage: {

@@ -9,6 +9,10 @@ import { runTui } from '../terminal/modes/TuiMode.js';
 
 const program = new Command();
 
+program.configureHelp({
+  sortSubcommands: true
+});
+
 program
   .name('ralph')
   .description('Ralph AI Agent CLI')

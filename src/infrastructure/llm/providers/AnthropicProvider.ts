@@ -80,12 +80,25 @@ export class AnthropicProvider implements ILlmProvider {
 
       console.log(`${color(`[${this.providerId}]`, colors.green)} Response: ${content.slice(0, 500)}${content.length > 500 ? '...' : ''}`);
 
+      let parsed = undefined;
+      if (payload.responseFormat) {
+        try {
+          const clean = content.replace(/```json\n|```/g, '').trim();
+          const json = JSON.parse(clean);
+          parsed = payload.responseFormat.schema.parse(json);
+        } catch (e) {
+          console.error(`${color(`[${this.providerId}]`, colors.red)} Schema validation failed: ${e}`);
+          throw new Error(`Structured output validation failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
       if (response.usage) {
         console.log(`${color(`[${this.providerId}]`, colors.magenta)} Usage: ${response.usage.input_tokens} input tokens, ${response.usage.output_tokens} output tokens`);
       }
 
       return {
         rawText: content,
+        parsed,
         tool_calls: tool_calls.length > 0 ? tool_calls : undefined,
         usage: {
           promptTokens: response.usage.input_tokens,

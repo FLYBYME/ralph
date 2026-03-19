@@ -9,6 +9,7 @@ import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { createLogger, Logger } from '../logging/Logger.js';
 import { TaskSummary } from '../storage/types.js';
 import { JanitorService } from './JanitorService.js';
+import { IRemoteProvider } from '../remote/types.js';
 
 export interface IWorkerManager {
   killAllProcesses(): Promise<void>;
@@ -33,6 +34,7 @@ export class DaemonOrchestrator {
     private readonly fsm: FiniteStateMachine,
     private readonly workerManager: IWorkerManager,
     private readonly providerRegistry: ProviderRegistry,
+    private readonly remoteProvider: IRemoteProvider,
     private readonly contextAnalyzer?: ContextAnalyzer,
     private readonly janitorService?: JanitorService
   ) {
@@ -51,7 +53,10 @@ export class DaemonOrchestrator {
     // 2. Zombie Recovery Routine
     await this.runZombieRecovery();
 
-    // 3. Register Signal Traps
+    // 3. Global Cleanup (Orphaned Docker containers)
+    await this.remoteProvider.cleanup();
+
+    // 4. Register Signal Traps
     process.on('SIGINT', () => this.shutdown('SIGINT'));
     process.on('SIGTERM', () => this.shutdown('SIGTERM'));
 
@@ -70,6 +75,9 @@ export class DaemonOrchestrator {
 
     // 1. Kill LLM child processes
     await this.workerManager.killAllProcesses();
+
+    // 2. Clean up Docker
+    await this.remoteProvider.cleanup();
 
     this.logger.info('Ralph has been halted safely.');
     process.exit(0);

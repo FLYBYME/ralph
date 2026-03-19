@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { StateContext, TaskRecord, FsmStep, ProjectRecord } from '../../storage/types.js';
 import { StepResult, StepStatus } from '../types.js';
 import { IStepHandler } from './IStepHandler.js';
@@ -7,6 +8,17 @@ import { PromptBuilder } from '../../llm/PromptBuilder.js';
 import { DiskTooling } from '../../storage/DiskTooling.js';
 import { LedgerStorageEngine } from '../../storage/LedgerStorageEngine.js';
 import { ProviderRegistry } from '../../llm/ProviderRegistry.js';
+
+type Plan = {
+  root_cause_analysis: string;
+  sub_tasks: {
+    id: string;
+    worker: string;
+    instructions: string;
+    target_files: string[];
+    depends_on: string[];
+  }[];
+};
 
 export class PlanHandler implements IStepHandler {
   constructor(
@@ -23,9 +35,30 @@ export class PlanHandler implements IStepHandler {
   public async execute(task: TaskRecord, _project: ProjectRecord, storageEngine: LedgerStorageEngine): Promise<StepResult> {
     const settings = await storageEngine.getSettings();
     const now = new Date().toISOString();
-    const lockedSpecialists = (settings.quotaLocks || [])
+    
+    // Combine quota locks and explicit disabled flags
+    const unavailableWorkers = (settings.quotaLocks || [])
         .filter(lock => lock.disabledUntil > now)
         .map(lock => lock.specialist);
+    
+    if (settings.workerGeminiEnabled === false && !unavailableWorkers.includes('gemini')) unavailableWorkers.push('gemini');
+    if (settings.workerCopilotEnabled === false && !unavailableWorkers.includes('copilot')) unavailableWorkers.push('copilot');
+    if (settings.workerOpencodeEnabled === false && !unavailableWorkers.includes('opencode')) unavailableWorkers.push('opencode');
+
+    const allWorkers = ['gemini', 'copilot', 'opencode'];
+    const activeWorkers = allWorkers.filter(w => !unavailableWorkers.includes(w));
+    const workerEnumOptions = activeWorkers.length > 0 ? activeWorkers as [string, ...string[]] : ['gemini'] as [string, ...string[]];
+
+    const DynamicPlanSchema = z.object({
+      root_cause_analysis: z.string(),
+      sub_tasks: z.array(z.object({
+        id: z.string(),
+        worker: z.enum(workerEnumOptions),
+        instructions: z.string(),
+        target_files: z.array(z.string()),
+        depends_on: z.array(z.string())
+      }))
+    });
 
     const selectedWorker = task.context.execution?.selectedWorker || 'gemini';
     const investigationNotes = task.context.investigation.notes || "No investigation notes.";
@@ -36,83 +69,60 @@ export class PlanHandler implements IStepHandler {
 - **Root Cause Analysis**: Explain *why* you are choosing this approach.
 - **Sub-Tasks**: Break the work into independent units of work.
 - **Specialists**: Choose 'gemini' for complex logic/state, 'copilot' for boilerplate/tests, and 'opencode' for shell/cleanup.
-${lockedSpecialists.length > 0 ? `- **UNAVAILABLE WORKERS**: Do NOT use ${lockedSpecialists.join(', ')} as they are out of quota.` : ''}
+${unavailableWorkers.length > 0 ? `- **UNAVAILABLE WORKERS**: Do NOT use ${unavailableWorkers.join(', ')} as they are disabled in settings or out of quota.` : ''}
 - **Dependencies**: Use 'depends_on' to ensure task_2 only starts after task_1 fixes the core bug.
-- **Target Files**: Be specific about which files each sub-task touches (max 3 per sub-task).`;
+- **Target Files**: Be specific about which files each sub-task touches (max 3 per sub-task).
+
+## FINAL OUTPUT FORMAT
+You MUST respond strictly with a JSON object matching this exact structure:
+{
+  "root_cause_analysis": "<string explaining the approach>",
+  "sub_tasks": [
+    {
+      "id": "task_1",
+      "worker": "<MUST be exactly one of: ${workerEnumOptions.join(', ')}>",
+      "instructions": "<string detailing what the worker must do>",
+      "target_files": ["<string file paths>"],
+      "depends_on": ["<array of preceding task IDs, or empty array if none>"]
+    }
+  ]
+}`;
 
     const userPrompt = `## Main Objective
 **${task.objective.title}**
 ${task.objective.originalPrompt || '(no description)'}
 
 ## Investigation Findings
-${investigationNotes}
-
-Respond with a JSON object in this format:
-{
-  "root_cause_analysis": "string",
-  "sub_tasks": [
-    {
-      "id": "task_1",
-      "worker": "gemini" | "copilot" | "opencode",
-      "instructions": "string",
-      "target_files": ["string"],
-      "depends_on": []
-    }
-  ]
-}`;
-
-    const schema = {
-        type: "object",
-        properties: {
-            root_cause_analysis: { type: "string" },
-            sub_tasks: {
-                type: "array",
-                items: {
-                    type: "object",
-                    properties: {
-                        id: { type: "string" },
-                        worker: { type: "string", enum: ["gemini", "copilot", "opencode"] },
-                        instructions: { type: "string" },
-                        target_files: { type: "array", items: { type: "string" } },
-                        depends_on: { type: "array", items: { type: "string" } }
-                    },
-                    required: ["id", "worker", "instructions", "target_files", "depends_on"]
-                }
-            }
-        },
-        required: ["root_cause_analysis", "sub_tasks"]
-    };
+${investigationNotes}`;
 
     const payload: Omit<WorkerPayload, 'model'> = {
         systemPrompt,
         userPrompt,
         contextFiles: [],
-        expectedOutputSchema: schema
+        responseFormat: {
+          schema: DynamicPlanSchema,
+          name: "plan"
+        }
     };
 
     const provider = this.providerRegistry.getActiveProvider();
     const model = this.providerRegistry.getActiveModel();
 
-    const response = await this.workerManager.dispatch(payload, provider, model);
-    
-    let plan: any = null;
+    let plan: Plan;
     try {
-        if (response.rawText) {
-            const clean = response.rawText.replace(/```json\n|```/g, '').trim();
-            plan = JSON.parse(clean);
-        }
+      const response = await this.workerManager.dispatch<Plan>(payload, provider, model);
+      if (!response.parsed) {
+        throw new Error("No parsed response from provider.");
+      }
+      plan = response.parsed;
     } catch (e) {
-        console.warn("[PlanHandler] Failed to parse plan JSON. Falling back.", e);
-        plan = { 
-            root_cause_analysis: "Plan generation failed. Defaulting to monolithic execution.", 
-            sub_tasks: [{
-                id: "task_0",
-                worker: selectedWorker,
-                instructions: investigationNotes,
-                target_files: [],
-                depends_on: []
-            }]
-        };
+      console.warn("[PlanHandler] Structured output failed. Yielding/Failing.", e);
+      return {
+          status: StepStatus.FATAL,
+          stateUpdates: {},
+          humanMessage: `⚠️ Ralph failed to generate a valid plan: ${e instanceof Error ? e.message : String(e)}`,
+          nextStepOverride: null
+      };
     }
 
     return {
@@ -133,7 +143,7 @@ Respond with a JSON object in this format:
         execution: {
             ...task.context.execution,
             geminiPrompt: plan.sub_tasks[0]?.instructions || investigationNotes,
-            selectedWorker: plan.sub_tasks[0]?.worker || selectedWorker
+            selectedWorker: (plan.sub_tasks[0]?.worker as any) || selectedWorker
         }
       },
       humanMessage: "Ralph has created a strategy and is waiting for your approval.",

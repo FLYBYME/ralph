@@ -233,6 +233,13 @@ export class RalphClient {
     return res.text();
   }
 
+  async backfillSummary(taskId: string): Promise<{ summary: string }> {
+    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/summary/backfill`, {
+      method: 'POST'
+    });
+    return res.json() as Promise<{ summary: string }>;
+  }
+
   getStreamUrl(taskId?: string, backlog: boolean = false): string {
     const url = new URL(`${this.baseUrl.replace(/\/api$/, '')}/api/stream`);
     if (taskId) {

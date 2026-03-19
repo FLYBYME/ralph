@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { zodResponseFormat } from 'openai/helpers/zod';
 import { ILlmProvider, WorkerPayload, WorkerResponse, ToolCall } from '../types.js';
 import { colors, color, dim } from '../../../utils/colors.js';
 
@@ -68,23 +69,57 @@ export class OpenAIProvider implements ILlmProvider {
       const displayPrompt = payload.messages ? `[ReAct Turn ${Math.floor(payload.messages.length / 2)}]` : payload.userPrompt;
       console.log(`${color(`[${this.providerId}]`, colors.yellow)} Prompt (${targetModel}): ${dim(displayPrompt.slice(0, 500))}${displayPrompt.length > 500 ? '...' : ''}`);
 
-      const response = await this.client.chat.completions.create({
-        model: targetModel,
-        messages,
-        ...(payload.expectedOutputSchema ? { response_format: { type: 'json_object' } } : {}),
-        tools: payload.tools?.map(t => ({
-          type: 'function',
-          function: {
-            name: t.function.name!,
-            description: t.function.description,
-            parameters: t.function.parameters as any
-          }
-        })) as any,
-        temperature: 0,
-      });
+      let response;
+      let content = '';
+      let parsed = undefined;
+      let tool_calls: ToolCall[] | undefined = undefined;
 
-      const choice = response.choices[0];
-      const content = choice?.message.content || '';
+      // RULE ENFORCEMENT: Only one or the other
+      if (payload.responseFormat) {
+          // STRUCTURED OUTPUT MODE (NO TOOLS)
+          console.log(`${color(`[${this.providerId}]`, colors.magenta)} Executing Structured Output (Tools Stripped)`);
+          const parseResponse = await this.client.chat.completions.parse({
+              model: targetModel,
+              messages,
+              response_format: zodResponseFormat(payload.responseFormat.schema, payload.responseFormat.name),
+              temperature: 0,
+          });
+          
+          const choice = parseResponse.choices[0];
+          content = choice?.message.content || '';
+          parsed = choice?.message.parsed;
+          response = parseResponse;
+      } else {
+          // STANDARD MODE (WITH TOOLS)
+          const createResponse = await this.client.chat.completions.create({
+              model: targetModel,
+              messages,
+              ...(payload.expectedOutputSchema ? { response_format: { type: 'json_object' } } : {}),
+              tools: payload.tools?.map(t => ({
+                  type: 'function',
+                  function: {
+                      name: t.function.name!,
+                      description: t.function.description,
+                      parameters: t.function.parameters as any
+                  }
+              })) as any,
+              temperature: 0,
+          });
+
+          const choice = createResponse.choices[0];
+          content = choice?.message.content || '';
+          tool_calls = choice?.message.tool_calls?.map((tc: any) => ({
+              id: tc.id,
+              function: {
+                  name: tc.function.name,
+                  arguments: typeof tc.function.arguments === 'string' 
+                    ? JSON.parse(tc.function.arguments) 
+                    : tc.function.arguments
+              }
+          })) as ToolCall[] | undefined;
+          response = createResponse;
+      }
+
       console.log(`${color(`[${this.providerId}]`, colors.green)} Response: ${content.slice(0, 500)}${content.length > 500 ? '...' : ''}`);
 
       if (response.usage) {
@@ -93,13 +128,8 @@ export class OpenAIProvider implements ILlmProvider {
 
       return {
         rawText: content,
-        tool_calls: choice?.message.tool_calls?.map((tc: any) => ({
-          id: tc.id,
-          function: {
-            name: tc.function.name,
-            arguments: JSON.parse(tc.function.arguments)
-          }
-        })) as ToolCall[] | undefined,
+        parsed,
+        tool_calls,
         usage: {
           promptTokens: response.usage?.prompt_tokens ?? 0,
           completionTokens: response.usage?.completion_tokens ?? 0

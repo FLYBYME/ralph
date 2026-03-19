@@ -21,8 +21,10 @@ export class WriteTestHandler implements IStepHandler {
     return context.currentStep === FsmStep.WRITE_TESTS;
   }
 
-  public async execute(task: TaskRecord, project: ProjectRecord, _storageEngine: LedgerStorageEngine): Promise<StepResult> {
+  public async execute(task: TaskRecord, project: ProjectRecord, storageEngine: LedgerStorageEngine): Promise<StepResult> {
     console.log(`[WriteTestHandler] Ralph is writing reproduction tests for task ${task.id}...`);
+
+    const settings = await storageEngine.getSettings();
 
     const prompt = `You are practicing strict Test-Driven Development. 
 Your objective is: ${task.objective.originalPrompt}. 
@@ -40,7 +42,8 @@ Brief summary of the tests written. Do NOT output file content in your final ans
     const result = await this.specialistExecutor.execute('gemini', prompt, {
       cwd: project.absolutePath,
       taskId: task.id,
-      activity: 'TDD: Writing reproduction tests'
+      activity: 'TDD: Writing reproduction tests',
+      timeoutMs: settings.specialistTimeoutMs
     });
 
     if (!result.success) {

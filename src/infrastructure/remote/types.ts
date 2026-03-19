@@ -98,4 +98,7 @@ export interface IRemoteProvider {
   getLatestCheckRuns(owner: string, repo: string, ref: string): Promise<CheckRunStatus[]>;
   getWorkflowLogs(owner: string, repo: string, runId: number): Promise<string>;
   triggerWorkflow(owner: string, repo: string, workflowId: string | number, ref: string, inputs?: Record<string, string>): Promise<void>;
+
+  // ─── Global Cleanup ──────────────────────────────────────────────────────
+  cleanup(): Promise<void>;
 }

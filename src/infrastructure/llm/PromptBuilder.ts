@@ -1,5 +1,26 @@
+import { z } from 'zod';
 import { TaskRecord, ProjectRecord } from '../storage/types.js';
 import { WorkerPayload, FileContext } from './types.js';
+
+export const ContextAnalysisSchema = z.object({
+  intent: z.enum(["QUESTION", "INSTRUCTION", "APPROVAL", "REJECT", "FAST_TRACK", "IGNORE"]),
+  detected_references: z.array(z.string()).optional(),
+  reasoning: z.string(),
+  suggested_reply: z.string().optional()
+});
+
+export const SelfReviewSchema = z.object({
+  is_satisfactory: z.boolean(),
+  notes: z.string(),
+  commit_message: z.string(),
+  diff_summary: z.string()
+});
+
+export const JudgeScorecardSchema = z.object({
+  score: z.number().min(0).max(100),
+  feedback: z.string(),
+  status: z.enum(["PASSED", "FAILED"])
+});
 
 export interface ChatPromptOptions {
   issueTitle: string;
@@ -334,13 +355,13 @@ Evaluate the Admin's intent based EXCLUSIVELY on the "LATEST ADMIN COMMENT". Use
 5. **FAST_TRACK**: Is the Admin telling you to skip planning and just write the code? (e.g. "just do it", "skip investigation")
 6. **IGNORE**: Is the comment not directed at you or not actionable?
 
-## Output Format
-Respond with a JSON object:
+## FINAL OUTPUT FORMAT
+You MUST respond strictly with a JSON object matching this exact structure:
 {
-  "intent": "QUESTION" | "INSTRUCTION" | "APPROVAL" | "REJECT" | "FAST_TRACK" | "IGNORE",
-  "detected_references": ["#123", "owner/repo#456"],
-  "reasoning": "Brief explanation of the decision",
-  "suggested_reply": "If a QUESTION, what is the direct answer based on your Investigation Notes?"
+  "intent": "<one of: QUESTION, INSTRUCTION, APPROVAL, REJECT, FAST_TRACK, IGNORE>",
+  "detected_references": ["<string references like #123>"],
+  "reasoning": "<string explaining your decision>",
+  "suggested_reply": "<string direct answer if intent is QUESTION>"
 }`;
 
     const userPrompt = `## Recent Conversation Context
@@ -349,23 +370,15 @@ ${recentComments}
 ## LATEST ADMIN COMMENT (ANALYZE THIS)
 "${latestAdminComment}"`;
 
-    const schema = {
-      type: "object",
-      properties: {
-        intent: { type: "string", enum: ["QUESTION", "INSTRUCTION", "APPROVAL", "REJECT", "FAST_TRACK", "IGNORE"] },
-        detected_references: { type: "array", items: { type: "string" } },
-        reasoning: { type: "string" },
-        suggested_reply: { type: "string" }
-      },
-      required: ["intent", "reasoning"]
-    };
-
     return {
       model,
       systemPrompt,
       userPrompt,
       contextFiles: [],
-      expectedOutputSchema: schema
+      responseFormat: {
+        schema: ContextAnalysisSchema,
+        name: "context_analysis"
+      }
     };
   }
 
@@ -386,13 +399,13 @@ Your goal is to ensure the changes accurately meet the task objective and follow
 4. Generate a professional, concise, yet descriptive **Git Commit Message** for these changes.
 5. Provide a brief summary of the changes for the 'diff_summary'.
 
-## Output Format
-Respond with a JSON object:
+## FINAL OUTPUT FORMAT
+You MUST respond strictly with a JSON object matching this exact structure:
 {
-  "is_satisfactory": boolean,
-  "notes": "Your detailed feedback or review notes",
-  "commit_message": "Suggested one-line commit message (optionally with bullet points)",
-  "diff_summary": "One-paragraph summary of what was actually changed"
+  "is_satisfactory": <boolean>,
+  "notes": "<string detailed feedback>",
+  "commit_message": "<string suggested commit message>",
+  "diff_summary": "<string paragraph summary of changes>"
 }`;
 
     const userPrompt = `## Git Diff to Review
@@ -405,16 +418,44 @@ ${diff}
       systemPrompt,
       userPrompt,
       contextFiles: [],
-      expectedOutputSchema: {
-        type: "object",
-        properties: {
-          is_satisfactory: { type: "boolean" },
-          notes: { type: "string" },
-          commit_message: { type: "string" },
-          diff_summary: { type: "string" }
-        },
-        required: ["is_satisfactory", "notes", "commit_message", "diff_summary"]
+      responseFormat: {
+        schema: SelfReviewSchema,
+        name: "self_review"
       }
+    };
+  }
+
+  /**
+   * Evaluates the quality of a finished task.
+   */
+  public buildJudgePrompt(task: TaskRecord, testsPassed: boolean, fsmSteps: string[], model: string): WorkerPayload {
+    const judgePrompt = `You are an expert code reviewer and judge. 
+Review the following task execution by an AI agent named Ralph.
+
+TASK: ${task.objective.title}
+OBJECTIVE: ${task.objective.originalPrompt}
+TESTS PASSED: ${testsPassed ? 'YES' : 'NO'}
+FSM PATH: ${fsmSteps.join(' -> ')}
+
+Evaluate the quality, correctness, and adherence to TDD if applicable.
+
+## FINAL OUTPUT FORMAT
+You MUST respond strictly with a JSON object matching this exact structure:
+{
+  "score": <number between 0 and 100>,
+  "feedback": "<string explaining your evaluation>",
+  "status": "<PASSED or FAILED>"
+}`;
+
+    return {
+        model,
+        systemPrompt: "You are an impartial judge. Respond ONLY with valid JSON.",
+        userPrompt: judgePrompt,
+        contextFiles: [],
+        responseFormat: {
+            schema: JudgeScorecardSchema,
+            name: "judge_scorecard"
+        }
     };
   }
 }
