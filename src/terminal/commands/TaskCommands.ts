@@ -198,8 +198,58 @@ export const taskLogsCommand: CommandDefinition = {
   }
 };
 
+export const taskReviewCommand: CommandDefinition = {
+  name: 'task:review',
+  description: 'Submit feedback/instructions for a task',
+  aliases: ['review'],
+  category: 'task',
+  args: [
+    { name: 'taskId', description: 'Task ID or prefix', required: true },
+    { name: 'feedback', description: 'Your message for Ralph', required: true }
+  ],
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const taskId = ctx.args['taskId']!;
+    const feedback = ctx.args['feedback']!;
+    await ctx.client.appendMessage(taskId, feedback, 'FEEDBACK');
+    return { success: true, message: `Feedback submitted for task ${taskId}.` };
+  }
+};
+
+export const taskRejectCommand: CommandDefinition = {
+  name: 'task:reject',
+  description: 'Reject a task and return it to investigation',
+  aliases: ['reject'],
+  category: 'task',
+  args: [
+    { name: 'taskId', description: 'Task ID or prefix', required: true }
+  ],
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const taskId = ctx.args['taskId']!;
+    await ctx.client.appendMessage(taskId, 'Rejected by admin. Please rethink and investigation again.', 'REJECT');
+    return { success: true, message: `Task ${taskId} rejected. Ralph is refocusing.` };
+  }
+};
+
+export const taskFinalizeCommand: CommandDefinition = {
+  name: 'task:finalize',
+  description: 'Approve a task and trigger final commit/push/PR',
+  aliases: ['finalize', 'publish'],
+  category: 'task',
+  args: [
+    { name: 'taskId', description: 'Task ID or prefix', required: true }
+  ],
+  execute: async (ctx: CommandContext): Promise<CommandResult> => {
+    const taskId = ctx.args['taskId']!;
+    await ctx.client.appendMessage(taskId, 'Approved. Please finalize and push.', 'APPROVAL');
+    return { success: true, message: `Finalization requested for task ${taskId}. Watch logs for PR creation.` };
+  }
+};
+
 registry.register(taskListCommand);
 registry.register(taskSolveCommand);
 registry.register(taskApproveCommand);
 registry.register(taskDiffCommand);
 registry.register(taskLogsCommand);
+registry.register(taskReviewCommand);
+registry.register(taskRejectCommand);
+registry.register(taskFinalizeCommand);

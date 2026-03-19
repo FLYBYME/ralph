@@ -253,6 +253,7 @@ export class LedgerStorageEngine {
         planning: { proposedSteps: [], targetFiles: [], requiredTools: [], planSummary: '' },
         execution: { activeWorkerId: '', attemptCount: 0, lastErrorLog: null, geminiPrompt: '', selectedWorker: 'gemini' },
         verification: { commandsRun: [], testOutput: '', lintPassed: false },
+        review: { selfReviewNotes: '', proposedCommitMessage: '', diffSummary: '' },
         contextStack: []
       },
       thread: { messages: [] },

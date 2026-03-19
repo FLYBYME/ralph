@@ -128,16 +128,24 @@ export class ContextAnalyzer {
 
       case 'APPROVAL':
         if (task.context.currentStep === FsmStep.AWAITING_REVIEW || task.status === 'AWAITING_REVIEW' || task.status === 'PAUSED') {
-          console.log(`${color('[analyzer]', colors.green)} Intent is APPROVAL. Resuming task.`);
+          console.log(`${color('[analyzer]', colors.green)} Intent is APPROVAL. Resuming/Advancing task.`);
           
-          if (task.context.currentStep === FsmStep.AWAITING_REVIEW || task.status === 'AWAITING_REVIEW') {
+          const isResultReview = !!task.context.execution.specialistOutput;
+
+          if (task.status === 'PAUSED') {
+              task.status = 'IN_PROGRESS';
               task.context.currentStep = FsmStep.EXECUTE;
-              respond(`🚀 Approval granted. Moving to execution phase.`);
-          } else {
               respond(`🚀 Manual approval received. Resuming task execution.`);
+          } else if (isResultReview) {
+              task.status = 'IN_PROGRESS';
+              task.context.currentStep = FsmStep.FINALIZE;
+              respond(`🚀 **Code Approved.** Advancing to final commitment phase.`);
+          } else {
+              task.status = 'IN_PROGRESS';
+              task.context.currentStep = FsmStep.EXECUTE;
+              respond(`🚀 **Plan Approved.** Moving to implementation phase.`);
           }
           
-          task.status = 'IN_PROGRESS';
           task.context.execution.attemptCount = 0;
           task.context.execution.consecutiveErrors = 0;
           return { interrupted: true };

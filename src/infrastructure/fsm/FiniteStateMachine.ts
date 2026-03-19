@@ -12,6 +12,8 @@ import { PromptBuilder } from '../llm/PromptBuilder.js';
 import { DiskTooling } from '../storage/DiskTooling.js';
 import { SpecialistExecutor } from '../llm/SpecialistExecutor.js';
 import { LedgerStorageEngine } from '../storage/LedgerStorageEngine.js';
+import { IRemoteProvider } from '../remote/types.js';
+import { FinalizeHandler } from './handlers/FinalizeHandler.js';
 import * as crypto from 'node:crypto';
 
 /**
@@ -26,13 +28,15 @@ export class FiniteStateMachine {
     providerRegistry: ProviderRegistry,
     promptBuilder: PromptBuilder,
     diskTooling: DiskTooling,
-    specialistExecutor: SpecialistExecutor
+    specialistExecutor: SpecialistExecutor,
+    remoteProvider: IRemoteProvider
   ) {
     this.handlers.set(FsmStep.INVESTIGATE, new InvestigateHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.PLAN, new PlanHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.EXECUTE, new ExecuteHandler(workerManager, providerRegistry, promptBuilder, diskTooling, specialistExecutor));
     this.handlers.set(FsmStep.VERIFY, new VerifyHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.AWAITING_REVIEW, new ReviewHandler());
+    this.handlers.set(FsmStep.FINALIZE, new FinalizeHandler(remoteProvider));
   }
 
   /**
@@ -106,6 +110,9 @@ export class FiniteStateMachine {
     if (updates.verification) {
       context.verification = { ...context.verification, ...updates.verification };
     }
+    if (updates.review) {
+      context.review = { ...context.review, ...updates.review };
+    }
     // currentStep is updated at transition time by applyTransition
   }
 
@@ -115,7 +122,8 @@ export class FiniteStateMachine {
       FsmStep.PLAN,
       FsmStep.EXECUTE,
       FsmStep.VERIFY,
-      FsmStep.AWAITING_REVIEW
+      FsmStep.AWAITING_REVIEW,
+      FsmStep.FINALIZE
     ];
     const index = sequence.indexOf(current);
     if (index === -1 || index === sequence.length - 1) {

@@ -83,7 +83,8 @@ async function main() {
     providerRegistry,
     promptBuilder,
     diskTooling,
-    specialistExecutor
+    specialistExecutor,
+    remoteProvider
   );
 
   // 3. Orchestrator Setup

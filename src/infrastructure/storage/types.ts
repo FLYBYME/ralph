@@ -7,7 +7,9 @@ export enum FsmStep {
   PLAN = 'PLAN',
   EXECUTE = 'EXECUTE',
   VERIFY = 'VERIFY',
-  AWAITING_REVIEW = 'AWAITING_REVIEW'
+  SELF_REVIEW = 'SELF_REVIEW',
+  AWAITING_REVIEW = 'AWAITING_REVIEW',
+  FINALIZE = 'FINALIZE'
 }
 
 export interface InvestigationContext {
@@ -45,6 +47,12 @@ export interface VerificationContext {
   lintPassed: boolean;
 }
 
+export interface ReviewContext {
+  selfReviewNotes: string;
+  proposedCommitMessage: string;
+  diffSummary: string;
+}
+
 export interface ContextStackItem {
   ref: string;
   summary: string;
@@ -56,6 +64,7 @@ export interface StateContext {
   planning: PlanningContext;
   execution: ExecutionContext;
   verification: VerificationContext;
+  review: ReviewContext;
   contextStack?: ContextStackItem[];
 }
 

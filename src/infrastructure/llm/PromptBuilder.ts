@@ -368,4 +368,53 @@ ${recentComments}
       expectedOutputSchema: schema
     };
   }
+
+  /**
+   * Phase 4 — Self-review prompt: Ralph reviews the specialist's git diff.
+   */
+  public buildSelfReviewPrompt(task: TaskRecord, diff: string, model: string): WorkerPayload {
+    const systemPrompt = `You are Ralph, an AI senior software engineer performing a self-review of changes made to a codebase.
+Your goal is to ensure the changes accurately meet the task objective and follow best practices.
+
+## Task Objective: ${task.objective.title}
+## Original Prompt: ${task.objective.originalPrompt}
+
+## Instructions
+1. Review the provided git diff carefully.
+2. Check for logic errors, missing tests, or security concerns.
+3. If the changes are insufficient or incorrect, explain why in the 'notes'.
+4. Generate a professional, concise, yet descriptive **Git Commit Message** for these changes.
+5. Provide a brief summary of the changes for the 'diff_summary'.
+
+## Output Format
+Respond with a JSON object:
+{
+  "is_satisfactory": boolean,
+  "notes": "Your detailed feedback or review notes",
+  "commit_message": "Suggested one-line commit message (optionally with bullet points)",
+  "diff_summary": "One-paragraph summary of what was actually changed"
+}`;
+
+    const userPrompt = `## Git Diff to Review
+\`\`\`diff
+${diff}
+\`\`\``;
+
+    return {
+      model,
+      systemPrompt,
+      userPrompt,
+      contextFiles: [],
+      expectedOutputSchema: {
+        type: "object",
+        properties: {
+          is_satisfactory: { type: "boolean" },
+          notes: { type: "string" },
+          commit_message: { type: "string" },
+          diff_summary: { type: "string" }
+        },
+        required: ["is_satisfactory", "notes", "commit_message", "diff_summary"]
+      }
+    };
+  }
 }
