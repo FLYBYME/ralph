@@ -14,7 +14,8 @@ import {
   ChatSession,
   KnowledgeEntry,
   KnowledgeCategory,
-  JsonValue
+  JsonValue,
+  EvalResult
 } from './types.js';
 import { LedgerCorruptionError } from './errors.js';
 import { createLogger, Logger } from '../logging/Logger.js';
@@ -28,6 +29,7 @@ export class LedgerStorageEngine {
   private readonly ledgerPath: string;
   private readonly ledgerTmpPath: string;
   private readonly knowledgePath: string;
+  private readonly evaluationsPath: string;
   private logger: Logger;
  
   constructor(baseDir: string = process.cwd()) {
@@ -39,6 +41,7 @@ export class LedgerStorageEngine {
     this.ledgerPath = path.join(this.dataDir, 'ledger.json');
     this.ledgerTmpPath = path.join(this.dataDir, 'ledger.tmp.json');
     this.knowledgePath = path.join(this.dataDir, 'knowledge.json');
+    this.evaluationsPath = path.join(this.dataDir, 'evaluations.json');
     this.logger = createLogger('storage');
   }
 
@@ -52,6 +55,12 @@ export class LedgerStorageEngine {
       await fs.access(this.knowledgePath);
     } catch {
       await fs.writeFile(this.knowledgePath, JSON.stringify([], null, 2), 'utf8');
+    }
+
+    try {
+      await fs.access(this.evaluationsPath);
+    } catch {
+      await fs.writeFile(this.evaluationsPath, JSON.stringify([], null, 2), 'utf8');
     }
 
     try {
@@ -125,6 +134,10 @@ export class LedgerStorageEngine {
       maxBacklog: parseInt(process.env.MAX_BACKLOG || '200', 10),
       maxIterations: parseInt(process.env.MAX_ITERATIONS || '10', 10),
       activeProviderId: process.env.ACTIVE_LLM_PROVIDER || 'ollama-local',
+      janitorEnabled: process.env.JANITOR_ENABLED === 'true',
+      janitorIntervalHours: parseInt(process.env.JANITOR_INTERVAL_HOURS || '1', 10),
+      janitorCooldownHours: parseInt(process.env.JANITOR_COOLDOWN_HOURS || '24', 10),
+      tddModeEnabled: process.env.TDD_MODE_ENABLED === 'true',
       providers: [
         {
           id: 'ollama-local',
@@ -201,7 +214,8 @@ export class LedgerStorageEngine {
     defaultBranch: string = 'main',
     isLocalOnly: boolean = true,
     sourceUrl?: string,
-    ciCommands: string[] = []
+    ciCommands: string[] = [],
+    isEval: boolean = false
   ): Promise<ProjectRecord> {
     return this.mutateLedger(async (ledger) => {
       const existing = ledger.projects.find(p => p.absolutePath === absolutePath);
@@ -212,6 +226,7 @@ export class LedgerStorageEngine {
           existing.sourceUrl = sourceUrl;
           existing.ciCommands = ciCommands;
           existing.lastScannedAt = new Date().toISOString();
+          existing.isEval = isEval;
           return existing;
       }
 
@@ -224,7 +239,8 @@ export class LedgerStorageEngine {
         ciCommands,
         defaultBranch,
         ignoredPaths: ['node_modules', '.git', 'dist'],
-        lastScannedAt: new Date().toISOString()
+        lastScannedAt: new Date().toISOString(),
+        isEval
       };
 
       ledger.projects.push(newProject);
@@ -361,6 +377,35 @@ export class LedgerStorageEngine {
     return results;
   }
 
+  // ─── Evaluation Management ───────────────────────────────────────────────
+
+  public async getEvalResults(): Promise<EvalResult[]> {
+    try {
+      const data = await fs.readFile(this.evaluationsPath, 'utf8');
+      return JSON.parse(data) as EvalResult[];
+    } catch {
+      return [];
+    }
+  }
+
+  public async getEvalResult(evalId: string): Promise<EvalResult | undefined> {
+    const results = await this.getEvalResults();
+    return results.find(r => r.id === evalId);
+  }
+
+  public async commitEvalResult(result: EvalResult): Promise<void> {
+    return this.withLock('evaluations', 5000, async () => {
+      const results = await this.getEvalResults();
+      const index = results.findIndex(r => r.id === result.id);
+      if (index !== -1) {
+        results[index] = result;
+      } else {
+        results.push(result);
+      }
+      await fs.writeFile(this.evaluationsPath, JSON.stringify(results, null, 2), 'utf8');
+    });
+  }
+
   // ─── Task Management ─────────────────────────────────────────────────────
 
   public async createTask(
@@ -370,10 +415,14 @@ export class LedgerStorageEngine {
     urgent: boolean = false,
     labels: string[] = [],
     assignees: string[] = [],
-    milestone?: string
+    milestone?: string,
+    useTDD?: boolean,
+    isEval: boolean = false
   ): Promise<TaskRecord> {
     const resolvedProjectId = await this.resolveProjectId(projectId).catch(() => projectId);
     const taskId = randomUUID();
+    const settings = await this.getSettings();
+    const finalUseTDD = useTDD ?? settings.tddModeEnabled;
 
     const taskRecord: TaskRecord = {
       id: taskId,
@@ -382,7 +431,8 @@ export class LedgerStorageEngine {
       objective: {
         title,
         originalPrompt,
-        successCriteria: []
+        successCriteria: [],
+        useTDD: finalUseTDD
       },
       context: {
         currentStep: FsmStep.INVESTIGATE,
@@ -399,7 +449,8 @@ export class LedgerStorageEngine {
       updatedAt: new Date().toISOString(),
       labels,
       assignees,
-      milestone
+      milestone,
+      isEval
     };
 
     const taskSummary: TaskSummary = {
@@ -408,10 +459,12 @@ export class LedgerStorageEngine {
       status: 'OPEN',
       title,
       urgent,
+      useTDD: finalUseTDD,
       humanInputReceived: false,
       labels,
       assignees,
-      milestone
+      milestone,
+      isEval
     };
 
     await this.mutateLedger(async (ledger) => {

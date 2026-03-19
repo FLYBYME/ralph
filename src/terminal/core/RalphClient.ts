@@ -36,12 +36,13 @@ export class RalphClient {
     urgent: boolean = false,
     labels: string[] = [],
     assignees: string[] = [],
-    milestone?: string
+    milestone?: string,
+    useTDD?: boolean
   ): Promise<{ taskId: string }> {
     const res = await fetch(`${this.baseUrl}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, projectId, input, urgent, labels, assignees, milestone })
+      body: JSON.stringify({ action, projectId, input, urgent, labels, assignees, milestone, useTDD })
     });
     return res.json() as Promise<{ taskId: string }>;
   }
@@ -124,6 +125,39 @@ export class RalphClient {
 
   async getQuotaStatus(): Promise<any[]> {
     const res = await fetch(`${this.baseUrl}/system/quota`);
+    return res.json() as Promise<any[]>;
+  }
+
+  async runJanitorAudit(): Promise<any> {
+    const res = await fetch(`${this.baseUrl}/system/janitor/run`, {
+      method: 'POST'
+    });
+    return res.json();
+  }
+
+  // ─── Evaluation ──────────────────────────────────────────────────────────
+
+  async runEval(scenarioId: string): Promise<{ evalId: string; message: string }> {
+    const res = await fetch(`${this.baseUrl}/eval/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenarioId })
+    });
+    return res.json() as Promise<{ evalId: string; message: string }>;
+  }
+
+  async getEvalStatus(evalId: string): Promise<any> {
+    const res = await fetch(`${this.baseUrl}/eval/${evalId}/status`);
+    return res.json();
+  }
+
+  async getEvalResults(): Promise<any[]> {
+    const res = await fetch(`${this.baseUrl}/eval/results`);
+    return res.json() as Promise<any[]>;
+  }
+
+  async getEvalScenarios(): Promise<any[]> {
+    const res = await fetch(`${this.baseUrl}/eval/scenarios`);
     return res.json() as Promise<any[]>;
   }
 

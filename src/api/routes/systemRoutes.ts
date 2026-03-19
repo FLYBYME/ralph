@@ -49,5 +49,17 @@ export function createSystemRouter(deps: ServerDependencies): Router {
     }
   });
 
+  router.post('/janitor/run', async (_req, res) => {
+    try {
+      if (!deps.janitorService) {
+        return res.status(503).json({ error: 'Janitor service not initialized' });
+      }
+      await deps.janitorService.runAudit();
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
   return router;
 }

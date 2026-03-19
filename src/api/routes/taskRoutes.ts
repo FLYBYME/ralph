@@ -177,14 +177,14 @@ export function createTaskRouter(deps: ServerDependencies): Router {
 
   router.post('/', async (req, res) => {
     try {
-      const { action: actionId, projectId, input, externalId, urgent, labels, assignees, milestone } = req.body;
+      const { action: actionId, projectId, input, externalId, urgent, labels, assignees, milestone, useTDD } = req.body;
       const action = deps.actionRegistry.get(actionId);
       
       if (!action) {
         return res.status(400).json({ error: `Unknown action: ${actionId}` });
       }
 
-      const result = await action.execute({ projectId, input, externalId, urgent, labels, assignees, milestone });
+      const result = await action.execute({ projectId, input, externalId, urgent, labels, assignees, milestone, useTDD });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: String(error) });

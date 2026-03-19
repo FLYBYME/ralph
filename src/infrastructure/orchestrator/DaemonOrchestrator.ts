@@ -8,6 +8,7 @@ import { ContextAnalyzer } from '../fsm/ContextAnalyzer.js';
 import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { createLogger, Logger } from '../logging/Logger.js';
 import { TaskSummary } from '../storage/types.js';
+import { JanitorService } from './JanitorService.js';
 
 export interface IWorkerManager {
   killAllProcesses(): Promise<void>;
@@ -22,6 +23,7 @@ export class DaemonOrchestrator {
   private isRunning: boolean = false;
   private tickIntervalMs: number = 1000;
   private tickCount: number = 0;
+  private consecutiveIdleTicks: number = 0;
   private logger: Logger;
 
   constructor(
@@ -31,7 +33,8 @@ export class DaemonOrchestrator {
     private readonly fsm: FiniteStateMachine,
     private readonly workerManager: IWorkerManager,
     private readonly providerRegistry: ProviderRegistry,
-    private readonly contextAnalyzer?: ContextAnalyzer
+    private readonly contextAnalyzer?: ContextAnalyzer,
+    private readonly janitorService?: JanitorService
   ) {
     this.logger = createLogger('orchestrator', eventBus);
   }
@@ -98,13 +101,25 @@ export class DaemonOrchestrator {
     const task = await this.taskQueue.getNextActiveTask();
     
     if (!task) {
+        this.consecutiveIdleTicks++;
         // Quiet mode: only log every 10 idle ticks
         if (this.tickCount % 10 === 0) {
-            this.logger.debug('IDLE - No active tasks in queue.');
+            this.logger.debug(`IDLE - No active tasks in queue. (Idle: ${this.consecutiveIdleTicks} ticks)`);
+        }
+
+        // Proactive Mode Trigger
+        if (this.janitorService) {
+            const settings = await this.storageEngine.getSettings();
+            const idleThresholdTicks = (settings.janitorIntervalHours || 1) * 3600; // 1 hour at 1s ticks
+            if (this.consecutiveIdleTicks >= idleThresholdTicks) {
+                this.consecutiveIdleTicks = 0;
+                await this.janitorService.runAudit();
+            }
         }
         return;
     }
 
+    this.consecutiveIdleTicks = 0;
     this.logger.info(`⚙️ TICK ${this.tickCount} | Task: ${task.id.slice(0, 8)} | Status: ${task.status}`, task.id);
 
     try {

@@ -42,6 +42,7 @@ export const taskSolveCommand: CommandDefinition = {
   options: [
     { flags: '-p, --project <id>', description: 'Project ID' },
     { flags: '-u, --urgent', description: 'Mark as urgent' },
+    { flags: '--tdd', description: 'Enable TDD pipeline for this task' },
     { flags: '-l, --label <label>', description: 'Add label' },
     { flags: '-a, --assignee <name>', description: 'Add assignee' },
     { flags: '-m, --milestone <name>', description: 'Set milestone' }
@@ -65,6 +66,7 @@ export const taskSolveCommand: CommandDefinition = {
     const labels = ctx.options['label'] ? [String(ctx.options['label'])] : [];
     const assignees = ctx.options['assignee'] ? [String(ctx.options['assignee'])] : [];
     const milestone = ctx.options['milestone'] ? String(ctx.options['milestone']) : undefined;
+    const useTDD = !!ctx.options['tdd'];
 
     const result = await ctx.client.createTask(
       'solve', 
@@ -73,7 +75,8 @@ export const taskSolveCommand: CommandDefinition = {
       !!ctx.options['urgent'], 
       labels, 
       assignees, 
-      milestone
+      milestone,
+      useTDD
     );
 
     return {

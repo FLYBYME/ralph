@@ -12,6 +12,7 @@ import { TaskQueue } from './infrastructure/queue/TaskQueue.js';
 import { FiniteStateMachine } from './infrastructure/fsm/FiniteStateMachine.js';
 import { ContextAnalyzer } from './infrastructure/fsm/ContextAnalyzer.js';
 import { DaemonOrchestrator } from './infrastructure/orchestrator/DaemonOrchestrator.js';
+import { JanitorService } from './infrastructure/orchestrator/JanitorService.js';
 import { SpecialistExecutor } from './infrastructure/llm/SpecialistExecutor.js';
 import { CommandManager } from './infrastructure/commands/CommandManager.js';
 import { LedgerRemoteProvider } from './infrastructure/remote/LedgerRemoteProvider.js';
@@ -19,6 +20,8 @@ import { TaskResolver } from './infrastructure/storage/TaskResolver.js';
 import { ActionRegistry } from './infrastructure/actions/ActionRegistry.js';
 import { SolveAction } from './infrastructure/actions/SolveAction.js';
 import { TriageAction } from './infrastructure/actions/TriageAction.js';
+import { AuditAction } from './infrastructure/actions/AuditAction.js';
+import { EvalManager } from './infrastructure/eval/EvalManager.js';
 import { startServer } from './api/server.js';
 import { createLogger } from './infrastructure/logging/Logger.js';
 
@@ -68,6 +71,7 @@ async function main() {
   const commandManager = new CommandManager(storageEngine, eventBus, workerManager, providerRegistry);
   const contextAnalyzer = new ContextAnalyzer(workerManager, providerRegistry, promptBuilder, commandManager);
   const specialistExecutor = new SpecialistExecutor(eventBus, storageEngine);
+  const evalManager = new EvalManager(storageEngine, eventBus, workerManager, providerRegistry);
 
   // 2. Actions & Remote Setup
   const remoteProvider = new LedgerRemoteProvider(storageEngine, diskTooling);
@@ -76,6 +80,16 @@ async function main() {
 
   actionRegistry.register(new SolveAction(storageEngine, eventBus, taskResolver));
   actionRegistry.register(new TriageAction(workerManager, providerRegistry, taskResolver));
+  const auditAction = new AuditAction(storageEngine, eventBus);
+  actionRegistry.register(auditAction);
+
+  const janitorService = new JanitorService(
+    storageEngine,
+    workerManager,
+    providerRegistry,
+    eventBus,
+    auditAction
+  );
 
   const taskQueue = new TaskQueue(storageEngine);
   const fsm = new FiniteStateMachine(
@@ -95,7 +109,8 @@ async function main() {
     fsm,
     workerManager,
     providerRegistry,
-    contextAnalyzer
+    contextAnalyzer,
+    janitorService
   );
 
   // 4. Unified Event Logging via Logger
@@ -178,7 +193,7 @@ async function main() {
       process.exit(1);
     }
 
-    await startServer(settings.serverPort, { storageEngine, actionRegistry, eventBus, remoteProvider, ollamaProvider: activeProvider, workerManager });
+    await startServer(settings.serverPort, { storageEngine, actionRegistry, eventBus, remoteProvider, ollamaProvider: activeProvider, workerManager, janitorService, evalManager });
     await orchestrator.boot();
   } catch (error) {
     logger.error(`Fatal error during boot: ${error}`);

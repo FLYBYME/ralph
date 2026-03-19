@@ -7,6 +7,8 @@ import { ExecuteHandler } from './handlers/ExecuteHandler.js';
 import { VerifyHandler } from './handlers/VerifyHandler.js';
 import { ReviewHandler } from './handlers/ReviewHandler.js';
 import { SelfReviewHandler } from './handlers/SelfReviewHandler.js';
+import { WriteTestHandler } from './handlers/WriteTestHandler.js';
+import { VerifyFailHandler } from './handlers/VerifyFailHandler.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
 import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { PromptBuilder } from '../llm/PromptBuilder.js';
@@ -34,6 +36,8 @@ export class FiniteStateMachine {
   ) {
     this.handlers.set(FsmStep.INVESTIGATE, new InvestigateHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.PLAN, new PlanHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
+    this.handlers.set(FsmStep.WRITE_TESTS, new WriteTestHandler(workerManager, providerRegistry, promptBuilder, diskTooling, specialistExecutor));
+    this.handlers.set(FsmStep.VERIFY_FAIL, new VerifyFailHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.EXECUTE, new ExecuteHandler(workerManager, providerRegistry, promptBuilder, diskTooling, specialistExecutor));
     this.handlers.set(FsmStep.VERIFY, new VerifyHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.SELF_REVIEW, new SelfReviewHandler(workerManager, providerRegistry, promptBuilder, remoteProvider));
@@ -74,7 +78,7 @@ export class FiniteStateMachine {
       task.context.currentStep = result.nextStepOverride;
     } else if (result.status === StepStatus.SUCCESS) {
       // Default sequential advancement
-      task.context.currentStep = this.getNextStep(task.context.currentStep || FsmStep.INVESTIGATE);
+      task.context.currentStep = this.getNextStep(task.context.currentStep || FsmStep.INVESTIGATE, task);
     } else if (result.status === StepStatus.FATAL) {
       // On FATAL failures, move to AWAITING_REVIEW to stop the loop
       task.context.currentStep = FsmStep.AWAITING_REVIEW;
@@ -118,8 +122,10 @@ export class FiniteStateMachine {
     // currentStep is updated at transition time by applyTransition
   }
 
-  private getNextStep(current: FsmStep): FsmStep {
-    const sequence = [
+  private getNextStep(current: FsmStep, task: TaskRecord): FsmStep {
+    const useTDD = task.objective.useTDD;
+
+    const standardSequence = [
       FsmStep.INVESTIGATE,
       FsmStep.PLAN,
       FsmStep.EXECUTE,
@@ -128,6 +134,20 @@ export class FiniteStateMachine {
       FsmStep.AWAITING_REVIEW,
       FsmStep.FINALIZE
     ];
+
+    const tddSequence = [
+      FsmStep.INVESTIGATE,
+      FsmStep.PLAN,
+      FsmStep.WRITE_TESTS,
+      FsmStep.VERIFY_FAIL,
+      FsmStep.EXECUTE,
+      FsmStep.VERIFY,
+      FsmStep.SELF_REVIEW,
+      FsmStep.AWAITING_REVIEW,
+      FsmStep.FINALIZE
+    ];
+
+    const sequence = useTDD ? tddSequence : standardSequence;
     const index = sequence.indexOf(current);
     if (index === -1 || index === sequence.length - 1) {
       return current; // Terminal state or unknown

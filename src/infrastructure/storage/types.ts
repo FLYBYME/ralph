@@ -1,10 +1,12 @@
 export type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'AWAITING_REVIEW';
 
-export type MessageIntent = 'COMMAND' | 'FEEDBACK' | 'APPROVAL' | 'STATUS_UPDATE' | 'ERROR' | 'CHAT';
+export type MessageIntent = 'COMMAND' | 'FEEDBACK' | 'APPROVAL' | 'STATUS_UPDATE' | 'ERROR' | 'CHAT' | 'AUDIT';
 
 export enum FsmStep {
   INVESTIGATE = 'INVESTIGATE',
   PLAN = 'PLAN',
+  WRITE_TESTS = 'WRITE_TESTS',
+  VERIFY_FAIL = 'VERIFY_FAIL',
   EXECUTE = 'EXECUTE',
   VERIFY = 'VERIFY',
   SELF_REVIEW = 'SELF_REVIEW',
@@ -97,6 +99,7 @@ export interface ProjectRecord {
   defaultBranch: string;
   ignoredPaths: string[];
   lastScannedAt: string;
+  isEval?: boolean;
 }
 
 export interface TaskSummary {
@@ -106,11 +109,13 @@ export interface TaskSummary {
   status: TaskStatus;
   title: string;
   urgent: boolean;
+  useTDD: boolean;
   humanInputReceived: boolean;
   resumeAfter?: string | undefined; // ISO timestamp
   labels: string[];
   assignees: string[];
   milestone?: string | undefined;
+  isEval?: boolean;
 }
 
 export interface ProviderConfig {
@@ -137,6 +142,10 @@ export interface AppSettings {
   providers: ProviderConfig[];
   activeProviderId: string;
   quotaLocks?: QuotaLock[];
+  janitorEnabled: boolean;
+  janitorIntervalHours: number;
+  janitorCooldownHours: number;
+  tddModeEnabled: boolean;
 }
 
 export interface QuotaLock {
@@ -150,12 +159,14 @@ export interface LocalLedger {
   projects: ProjectRecord[];
   tasks: TaskSummary[];
   settings: AppSettings;
+  lastJanitorRun?: string;
 }
 
 export interface TaskObjective {
   title: string;
   originalPrompt: string;
   successCriteria: string[];
+  useTDD: boolean;
 }
 
 export interface ChatMessage {
@@ -202,6 +213,7 @@ export interface TaskRecord {
   labels: string[];
   assignees: string[];
   milestone?: string | undefined;
+  isEval?: boolean;
 }
 
 export interface AuditLogEntry {
@@ -210,4 +222,19 @@ export interface AuditLogEntry {
   transitionTo: string;
   triggerEvent: string;
   reasoning: string;
+}
+
+export type EvalStatus = 'PENDING' | 'RUNNING' | 'PASSED' | 'FAILED' | 'ERROR';
+
+export interface EvalResult {
+  id: string;
+  scenarioId: string;
+  taskId: string;
+  status: EvalStatus;
+  startTime: string;
+  endTime?: string;
+  score?: number; // 0-100
+  feedback?: string;
+  fsmSteps: string[]; // Path followed
+  judgeModel?: string;
 }

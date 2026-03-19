@@ -13,7 +13,10 @@ import { createStreamRouter } from './routes/streamRoutes.js';
 import { createSettingsRouter } from './routes/settingsRoutes.js';
 import { createChatRouter } from './routes/chatRoutes.js';
 import { createKnowledgeRouter } from './routes/knowledgeRoutes.js';
+import { createEvalRouter } from './routes/evalRoutes.js';
 import { createLogger } from '../infrastructure/logging/Logger.js';
+import { JanitorService } from '../infrastructure/orchestrator/JanitorService.js';
+import { EvalManager } from '../infrastructure/eval/EvalManager.js';
 
 export interface ServerDependencies {
   storageEngine: LedgerStorageEngine;
@@ -22,6 +25,8 @@ export interface ServerDependencies {
   remoteProvider: IRemoteProvider;
   ollamaProvider: ILlmProvider;
   workerManager: WorkerManager;
+  janitorService?: JanitorService;
+  evalManager?: EvalManager;
 }
 
 export function startServer(port: number, deps: ServerDependencies) {
@@ -43,6 +48,7 @@ export function startServer(port: number, deps: ServerDependencies) {
   app.use('/api/settings', createSettingsRouter(deps));
   app.use('/api/chats', createChatRouter(deps));
   app.use('/api/kb', createKnowledgeRouter(deps));
+  app.use('/api/eval', createEvalRouter(deps));
 
   // Health check alias (optional)
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));

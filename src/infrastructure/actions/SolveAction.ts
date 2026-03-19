@@ -20,7 +20,7 @@ export class SolveAction implements IAction {
    * Orchestrates the creation of a new solving task.
    */
   public async execute(params: ActionParams): Promise<ActionResult> {
-    const { projectId, externalId, input, urgent } = params;
+    const { projectId, externalId, input, urgent, useTDD, labels, assignees, milestone } = params;
 
     if (!projectId) {
       return { success: false, taskId: '', message: 'projectId is required' };
@@ -38,7 +38,11 @@ export class SolveAction implements IAction {
         projectId,
         resolved.title,
         finalPrompt,
-        urgent ?? false
+        urgent ?? false,
+        labels ?? [],
+        assignees ?? [],
+        milestone,
+        useTDD
       );
 
       // 4. Broadcast intent via EventBus

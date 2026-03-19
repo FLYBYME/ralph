@@ -182,6 +182,16 @@ export const configCommand: CommandDefinition = {
   }
 };
 
+registry.register({
+  name: 'janitor:run',
+  description: 'Manually trigger a proactive janitor audit across all projects.',
+  category: 'system',
+  execute: async (ctx: CommandContext) => {
+    await ctx.client.runJanitorAudit();
+    return { success: true, message: 'Janitor audit triggered successfully.' };
+  }
+});
+
 registry.register(helpCommand);
 registry.register(exitCommand);
 registry.register(streamCommand);
