@@ -67,10 +67,13 @@ export class EvalManager {
     const evalWorkspacePath = path.join(process.cwd(), 'data', 'workspaces', 'evals', evalId);
     await fs.mkdir(evalWorkspacePath, { recursive: true });
     
+    // Copy project files to sandbox
+    await fs.cp(templateProject.absolutePath, evalWorkspacePath, { recursive: true });
+
     // 2. Register Ephemeral Project
     const project = await this.storageEngine.addProject(
         `${templateProject.name}-eval-${evalId.slice(0,8)}`,
-        templateProject.absolutePath, 
+        evalWorkspacePath, 
         templateProject.defaultBranch,
         true, // Local only for evals
         undefined,

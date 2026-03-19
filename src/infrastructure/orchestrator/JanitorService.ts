@@ -77,11 +77,25 @@ export class JanitorService {
     const pkgPath = path.join(project.absolutePath, 'package.json');
     if (await this.diskTooling.fileExists(pkgPath)) {
         this.logger.debug(`[Strategy A] Found package.json for ${project.name}. Dependency audit initiated.`);
+        
+        await this.auditAction.execute({
+            projectId: project.id,
+            title: `[Maintenance] Dependency Audit for ${project.name}`,
+            input: `Run 'npm audit' or check for outdated packages in ${project.absolutePath}. Update the package.json if necessary.`,
+            useTDD: false
+        });
     }
 
     // Strategy B: Code Smell Review
     if (project.sourceUrl || !project.isLocalOnly) {
         this.logger.debug(`[Strategy B] Running code smell review for ${project.name}...`);
+        
+        await this.auditAction.execute({
+            projectId: project.id,
+            title: `[Maintenance] Code Smell Review for ${project.name}`,
+            input: `Review the recent changes in ${project.name} for code smells, missing types, or refactoring opportunities.`,
+            useTDD: false
+        });
     }
     
     // Check members to avoid unused warnings
