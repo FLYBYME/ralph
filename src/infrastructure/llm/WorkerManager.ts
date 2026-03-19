@@ -1,4 +1,4 @@
-import { ILlmProvider, WorkerPayload, WorkerResponse } from './types.js';
+import { ILlmProvider, WorkerPayload, WorkerResponse, LlmMessage } from './types.js';
 import { LocalEventBus } from '../bus/LocalEventBus.js';
 import { ToolRegistry, toToolParams, PlanProposedError, InvestigationConcludedError, ProposedPlan } from './ToolRegistry.js';
 import { colors, color } from '../../utils/colors.js';
@@ -25,6 +25,10 @@ export class WorkerManager {
 
   constructor(private readonly eventBus: LocalEventBus) {}
 
+  public getActiveProcessesCount(): number {
+    return this.activeProcesses.size;
+  }
+
   /**
    * Dispatches a single turn request to an LLM provider.
    */
@@ -44,8 +48,8 @@ export class WorkerManager {
     try {
       const response = await provider.generateResponse({ ...payload, model });
       return response;
-    } catch (error) {
-      if ((error as any).name === 'AbortError') {
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
         throw new TimeoutError(`LLM request timed out after ${timeoutMs}ms`);
       }
       throw error;
@@ -67,13 +71,15 @@ export class WorkerManager {
         tools: ToolRegistry;
         maxIterations?: number;
         taskId: string;
+        history?: LlmMessage[];
     }
   ): Promise<ReActResult> {
-    const { model, systemPrompt, initialPrompt, provider, tools, maxIterations = 10, taskId } = options;
+    const { model, systemPrompt, initialPrompt, provider, tools, maxIterations = 10, taskId, history = [] } = options;
     const ollamaTools = [...tools.values()].map(t => t.ollamaTool);
 
-    let messages: any[] = [
+    let messages: LlmMessage[] = [
       { role: 'system', content: systemPrompt },
+      ...history,
       { role: 'user', content: initialPrompt },
     ];
 
@@ -82,24 +88,22 @@ export class WorkerManager {
     while (iterations < maxIterations) {
       iterations++;
 
+      const lastMsg = messages[messages.length - 1];
       const payload: WorkerPayload = {
           model,
           systemPrompt,
-          userPrompt: messages[messages.length - 1].content,
+          userPrompt: lastMsg ? lastMsg.content : initialPrompt,
           messages: messages, // Send full history
           contextFiles: [],
-          tools: ollamaTools as any
+          tools: ollamaTools as any // Cast for provider compatibility
       };
 
       const response = await provider.generateResponse(payload);
 
-      const assistantMsg = { 
+      const assistantMsg: LlmMessage = { 
           role: 'assistant', 
           content: response.rawText || '', 
-          tool_calls: response.tool_calls?.map(tc => ({
-              ...tc,
-              type: 'function'
-          }))
+          tool_calls: response.tool_calls
       };
 
       console.log(`${color('[ollama:thought]', colors.cyan)} ${assistantMsg.content || '(tool call)'}`);

@@ -1,9 +1,78 @@
 import { Router } from 'express';
 import { ServerDependencies } from '../server.js';
 import { createToolRegistry, toToolParams } from '../../infrastructure/llm/ToolRegistry.js';
+import { DiskTooling } from '../../infrastructure/storage/DiskTooling.js';
 
 export function createProjectRouter(deps: ServerDependencies): Router {
   const router = Router();
+  const diskTooling = new DiskTooling();
+
+  router.get('/:id/tree', async (req, res) => {
+    try {
+      const project = await deps.storageEngine.getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const files = await diskTooling.listFiles(project.absolutePath, true);
+      const relativeFiles = files.map(f => f.replace(project.absolutePath + '/', ''));
+      res.json(relativeFiles);
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  router.post('/:id/index', async (req, res) => {
+    try {
+      const project = await deps.storageEngine.getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+
+      const registry = createToolRegistry({
+        repoPath: project.absolutePath,
+        workerManager: deps.workerManager,
+        workerProvider: deps.ollamaProvider,
+        storageEngine: deps.storageEngine,
+      });
+
+      const tool = registry.get('spawnSubAgent');
+      if (!tool) return res.status(500).json({ error: 'Indexing tool not found' });
+
+      const result = await tool.execute({ 
+        role: 'researcher', 
+        instruction: 'Scan the codebase and provide a comprehensive architectural summary of the main components and their interactions.' 
+      });
+      
+      // Update project record with summary (optional but good)
+      await deps.storageEngine.mutateLedger(async (ledger) => {
+        const p = ledger.projects.find(proj => proj.id === project.id);
+        if (p) p.architecturalSummary = result.output;
+      });
+
+      res.json({ success: true, summary: result.output });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
+  router.get('/:id/search', async (req, res) => {
+    try {
+      const { q } = req.query;
+      const project = await deps.storageEngine.getProject(req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+
+      const registry = createToolRegistry({
+        repoPath: project.absolutePath,
+        workerManager: deps.workerManager,
+        workerProvider: deps.ollamaProvider,
+        storageEngine: deps.storageEngine,
+      });
+
+      const tool = registry.get('searchFileContent');
+      if (!tool) return res.status(500).json({ error: 'Search tool not found' });
+
+      const result = await tool.execute({ query: String(q) });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
 
   router.get('/', async (_req, res) => {
     try {

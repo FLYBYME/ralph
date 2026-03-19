@@ -1,6 +1,6 @@
 import { ToolCall } from '../llm/types.js';
 
-export type EventType = 'FSM_TRANSITION' | 'WORKER_STREAM' | 'HUMAN_INTERVENTION_REQUIRED' | 'SPECIALIST_START' | 'SPECIALIST_COMPLETE' | 'SPECIALIST_LOG' | 'TOOL_CALL' | 'SYSTEM_LOG';
+export type EventType = 'FSM_TRANSITION' | 'WORKER_STREAM' | 'HUMAN_INTERVENTION_REQUIRED' | 'SPECIALIST_START' | 'SPECIALIST_COMPLETE' | 'SPECIALIST_LOG' | 'TOOL_CALL' | 'SYSTEM_LOG' | 'KNOWLEDGE_PUBLISHED' | 'CHAT_MESSAGE_APPENDED';
 
 export interface BaseEvent {
   type: EventType;
@@ -62,6 +62,27 @@ export interface SystemLogEvent extends BaseEvent {
   message: string;
 }
 
-export type SystemEvent = FsmTransitionEvent | WorkerStreamEvent | HumanInterventionRequiredEvent | SpecialistStartEvent | SpecialistCompleteEvent | SpecialistLogEvent | ToolCallEvent | SystemLogEvent;
+export interface KnowledgePublishedEvent extends BaseEvent {
+  type: 'KNOWLEDGE_PUBLISHED';
+  entryId: string;
+}
+
+export interface ChatMessageAppendedEvent extends BaseEvent {
+  type: 'CHAT_MESSAGE_APPENDED';
+  sessionId: string;
+  author: 'HUMAN' | 'RALPH' | 'SYSTEM';
+}
+
+export type SystemEvent = 
+  | FsmTransitionEvent 
+  | WorkerStreamEvent 
+  | HumanInterventionRequiredEvent 
+  | SpecialistStartEvent 
+  | SpecialistCompleteEvent 
+  | SpecialistLogEvent 
+  | ToolCallEvent 
+  | SystemLogEvent
+  | KnowledgePublishedEvent
+  | ChatMessageAppendedEvent;
 
 export type EventHandler<T extends SystemEvent = SystemEvent> = (event: T) => void;

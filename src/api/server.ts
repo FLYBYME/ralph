@@ -11,6 +11,8 @@ import { createTaskRouter } from './routes/taskRoutes.js';
 import { createSystemRouter } from './routes/systemRoutes.js';
 import { createStreamRouter } from './routes/streamRoutes.js';
 import { createSettingsRouter } from './routes/settingsRoutes.js';
+import { createChatRouter } from './routes/chatRoutes.js';
+import { createKnowledgeRouter } from './routes/knowledgeRoutes.js';
 import { createLogger } from '../infrastructure/logging/Logger.js';
 
 export interface ServerDependencies {
@@ -39,6 +41,8 @@ export function startServer(port: number, deps: ServerDependencies) {
   app.use('/api/system', createSystemRouter(deps));
   app.use('/api/stream', createStreamRouter(deps));
   app.use('/api/settings', createSettingsRouter(deps));
+  app.use('/api/chats', createChatRouter(deps));
+  app.use('/api/kb', createKnowledgeRouter(deps));
 
   // Health check alias (optional)
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));

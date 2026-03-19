@@ -1,3 +1,5 @@
+export type JsonValue = string | number | boolean | null | { [key: string]: JsonValue } | JsonValue[];
+
 export interface FileContext {
   path: string;
   content: string;
@@ -11,15 +13,15 @@ export interface WorkerTool {
     type?: string;
     parameters?: {
       type?: string;
-      $defs?: Record<string, unknown>;
-      items?: unknown;
+      $defs?: Record<string, JsonValue>;
+      items?: JsonValue;
       required?: string[];
       properties?: {
         [key: string]: {
           type?: string | string[];
-          items?: unknown;
+          items?: JsonValue;
           description?: string;
-          enum?: unknown[];
+          enum?: JsonValue[];
         };
       };
     };
@@ -30,18 +32,24 @@ export interface ToolCall {
   id?: string;
   function: {
     name: string;
-    arguments: Record<string, unknown>;
+    arguments: Record<string, JsonValue>;
   };
 }
 
+export interface LlmMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  tool_call_id?: string | undefined;
+  tool_calls?: ToolCall[] | undefined;
+}
 
 export interface WorkerPayload {
   model: string;
   systemPrompt: string;
   userPrompt: string;
-  messages?: any[];
+  messages?: LlmMessage[];
   contextFiles: FileContext[];
-  expectedOutputSchema?: unknown; // JSON Schema or Zod
+  expectedOutputSchema?: JsonValue; // JSON Schema or Zod
   tools?: WorkerTool[] | undefined;
 }
 

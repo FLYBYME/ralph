@@ -1,6 +1,6 @@
 export type TaskStatus = 'OPEN' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'AWAITING_REVIEW';
 
-export type MessageIntent = 'COMMAND' | 'FEEDBACK' | 'APPROVAL' | 'STATUS_UPDATE' | 'ERROR';
+export type MessageIntent = 'COMMAND' | 'FEEDBACK' | 'APPROVAL' | 'STATUS_UPDATE' | 'ERROR' | 'CHAT';
 
 export enum FsmStep {
   INVESTIGATE = 'INVESTIGATE',
@@ -11,6 +11,8 @@ export enum FsmStep {
   AWAITING_REVIEW = 'AWAITING_REVIEW',
   FINALIZE = 'FINALIZE'
 }
+
+export type JsonValue = string | number | boolean | null | { [key: string]: JsonValue } | JsonValue[];
 
 export interface InvestigationContext {
   discoveredFiles: string[];
@@ -81,7 +83,7 @@ export interface StateContext {
 }
 
 export interface WorkspaceState {
-  [key: string]: unknown;
+  [key: string]: JsonValue;
 }
 
 export interface ProjectRecord {
@@ -166,6 +168,25 @@ export interface ChatMessage {
 
 export interface TaskThread {
   messages: ChatMessage[];
+}
+
+export interface ChatSession {
+  id: string;
+  projectId: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+export type KnowledgeCategory = 'Runbook' | 'Architecture' | 'Policy' | 'Tutorial';
+
+export interface KnowledgeEntry {
+  id: string; // e.g., kb-arch-1234
+  title: string;
+  category: KnowledgeCategory;
+  tags: string[];
+  lastUpdated: string; // ISO timestamp
+  contentBlocks: string[]; // Discrete paragraphs or bullet points
+  relatedEntries: string[]; // Array of IDs
 }
 
 export interface TaskRecord {

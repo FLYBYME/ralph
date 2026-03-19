@@ -11,6 +11,10 @@ import {
   TaskRecord,
   TaskStatus,
   TaskSummary,
+  ChatSession,
+  KnowledgeEntry,
+  KnowledgeCategory,
+  JsonValue
 } from './types.js';
 import { LedgerCorruptionError } from './errors.js';
 import { createLogger, Logger } from '../logging/Logger.js';
@@ -20,8 +24,10 @@ export class LedgerStorageEngine {
   private readonly tasksDir: string;
   private readonly logsDir: string;
   private readonly workspacesDir: string;
+  private readonly chatsDir: string;
   private readonly ledgerPath: string;
   private readonly ledgerTmpPath: string;
+  private readonly knowledgePath: string;
   private logger: Logger;
  
   constructor(baseDir: string = process.cwd()) {
@@ -29,15 +35,23 @@ export class LedgerStorageEngine {
     this.tasksDir = path.join(this.dataDir, 'tasks');
     this.logsDir = path.join(this.dataDir, 'logs');
     this.workspacesDir = path.join(this.dataDir, 'workspaces');
+    this.chatsDir = path.join(this.dataDir, 'chats');
     this.ledgerPath = path.join(this.dataDir, 'ledger.json');
     this.ledgerTmpPath = path.join(this.dataDir, 'ledger.tmp.json');
+    this.knowledgePath = path.join(this.dataDir, 'knowledge.json');
     this.logger = createLogger('storage');
   }
 
   public async bootstrapEnvironment(): Promise<void> {
-    const dirs = [this.dataDir, this.tasksDir, this.logsDir, this.workspacesDir];
+    const dirs = [this.dataDir, this.tasksDir, this.logsDir, this.workspacesDir, this.chatsDir];
     for (const dir of dirs) {
       await fs.mkdir(dir, { recursive: true });
+    }
+
+    try {
+      await fs.access(this.knowledgePath);
+    } catch {
+      await fs.writeFile(this.knowledgePath, JSON.stringify([], null, 2), 'utf8');
     }
 
     try {
@@ -54,7 +68,7 @@ export class LedgerStorageEngine {
         let changed = false;
         for (const [key, value] of Object.entries(defaults)) {
           if (ledger.settings[key as keyof AppSettings] === undefined) {
-            (ledger.settings[key as keyof AppSettings] as any) = value;
+            (ledger.settings[key as keyof AppSettings] as JsonValue) = value as JsonValue;
             changed = true;
           }
         }
@@ -224,6 +238,129 @@ export class LedgerStorageEngine {
     return ledger.projects.find(p => p.id === resolvedId);
   }
 
+  // ─── Chat Sessions ───────────────────────────────────────────────────────
+
+  public async createChatSession(projectId: string): Promise<ChatSession> {
+    const resolvedProjectId = await this.resolveProjectId(projectId).catch(() => projectId);
+    const sessionId = randomUUID();
+
+    const session: ChatSession = {
+      id: sessionId,
+      projectId: resolvedProjectId,
+      messages: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await this.commitChatSession(session);
+    return session;
+  }
+
+  public async getChatSession(sessionId: string): Promise<ChatSession> {
+    const chatPath = path.join(this.chatsDir, `${sessionId}.json`);
+    try {
+      const data = await fs.readFile(chatPath, 'utf8');
+      return JSON.parse(data) as ChatSession;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`Chat session not found: ${sessionId}`);
+      }
+      throw error;
+    }
+  }
+
+  public async commitChatSession(session: ChatSession): Promise<void> {
+    session.updatedAt = new Date().toISOString();
+    const chatPath = path.join(this.chatsDir, `${session.id}.json`);
+    const chatTmpPath = path.join(this.chatsDir, `${session.id}.tmp.json`);
+    const data = JSON.stringify(session, null, 2);
+
+    await fs.writeFile(chatTmpPath, data, 'utf8');
+    await fs.rename(chatTmpPath, chatPath);
+  }
+
+  public async appendMessageToChatSession(
+    sessionId: string,
+    author: 'HUMAN' | 'RALPH' | 'SYSTEM',
+    body: string,
+    intent: MessageIntent = 'CHAT'
+  ): Promise<void> {
+    return this.withLock(sessionId, 5000, async () => {
+      const session = await this.getChatSession(sessionId);
+      session.messages.push({
+        id: randomUUID(),
+        author,
+        body,
+        intent,
+        timestamp: new Date().toISOString()
+      });
+      await this.commitChatSession(session);
+    });
+  }
+
+  public async getChatSessionsForProject(projectId: string): Promise<ChatSession[]> {
+    const resolvedProjectId = await this.resolveProjectId(projectId).catch(() => projectId);
+    const files = await fs.readdir(this.chatsDir);
+    const sessions: ChatSession[] = [];
+
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const sessionId = file.replace('.json', '');
+        const session = await this.getChatSession(sessionId);
+        if (session.projectId === resolvedProjectId) {
+          sessions.push(session);
+        }
+      }
+    }
+
+    return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  // ─── Knowledge Database ──────────────────────────────────────────────────
+
+  public async getKnowledgeBase(): Promise<KnowledgeEntry[]> {
+    try {
+      const data = await fs.readFile(this.knowledgePath, 'utf8');
+      return JSON.parse(data) as KnowledgeEntry[];
+    } catch {
+      return [];
+    }
+  }
+
+  public async publishKnowledge(entry: Omit<KnowledgeEntry, 'id' | 'lastUpdated'>): Promise<KnowledgeEntry> {
+    return this.withLock('knowledge', 5000, async () => {
+      const kb = await this.getKnowledgeBase();
+      const newEntry: KnowledgeEntry = {
+        ...entry,
+        id: `kb-${entry.category.toLowerCase().slice(0, 4)}-${randomUUID().slice(0, 8)}`,
+        lastUpdated: new Date().toISOString()
+      };
+      kb.push(newEntry);
+      await fs.writeFile(this.knowledgePath, JSON.stringify(kb, null, 2), 'utf8');
+      return newEntry;
+    });
+  }
+
+  public async getKnowledgeEntry(id: string): Promise<KnowledgeEntry | undefined> {
+    const kb = await this.getKnowledgeBase();
+    return kb.find(e => e.id === id);
+  }
+
+  public async searchKnowledge(query: string, category?: KnowledgeCategory): Promise<KnowledgeEntry[]> {
+    const kb = await this.getKnowledgeBase();
+    let results = kb.filter(e => 
+      e.title.toLowerCase().includes(query.toLowerCase()) || 
+      e.tags.some(t => t.toLowerCase().includes(query.toLowerCase())) ||
+      e.contentBlocks.some(c => c.toLowerCase().includes(query.toLowerCase()))
+    );
+
+    if (category) {
+      results = results.filter(e => e.category === category);
+    }
+
+    return results;
+  }
+
   // ─── Task Management ─────────────────────────────────────────────────────
 
   public async createTask(
@@ -365,6 +502,25 @@ export class LedgerStorageEngine {
     await this.mutateTaskRecord(resolvedId, async (record) => {
       record.milestone = milestone;
     });
+  }
+
+  public async deleteTask(taskId: string): Promise<void> {
+    const resolvedId = await this.resolveTaskId(taskId);
+    
+    // 1. Remove from ledger summary
+    await this.mutateLedger(async (ledger) => {
+      ledger.tasks = ledger.tasks.filter(t => t.id !== resolvedId);
+    });
+
+    // 2. Delete the record file
+    const taskPath = path.join(this.tasksDir, `${resolvedId}.json`);
+    try {
+      await fs.unlink(taskPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
   }
 
   // ─── Auth/Policy ─────────────────────────────────────────────────────────

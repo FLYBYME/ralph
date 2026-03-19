@@ -36,6 +36,11 @@ export class ContextAnalyzer {
       return { interrupted: false };
     }
 
+    // FSM FIREWALL: Ignore messages with CHAT intent
+    if (lastHuman.intent === 'CHAT') {
+       return { interrupted: false };
+    }
+
     // Has it been processed?
     if (messages[messages.length - 1]?.id !== lastHuman.id) {
        return { interrupted: false };

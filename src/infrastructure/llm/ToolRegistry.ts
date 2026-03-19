@@ -7,6 +7,7 @@ import { DiskTooling } from '../storage/DiskTooling.js';
 import { WorkerManager } from './WorkerManager.js';
 import { ILlmProvider, WorkerPayload } from './types.js';
 import { LedgerStorageEngine } from '../storage/LedgerStorageEngine.js';
+import { KnowledgeCategory } from '../storage/types.js';
 
 const execAsync = promisify(exec);
 
@@ -213,6 +214,81 @@ export function createToolRegistry(ctx: ToolContext): ToolRegistry {
       } catch (err: any) {
         if (err.code === 1) return { success: true, output: `No content matching "${query}" found.` };
         return { success: false, output: `Search failed: ${err.message}` };
+      }
+    },
+  });
+
+  // ── searchKnowledgeBase ──────────────────────────────────────────────────
+  registry.set('searchKnowledgeBase', {
+    ollamaTool: makeTool(
+      'searchKnowledgeBase',
+      'Search the internal knowledge base for architectural patterns, runbooks, or policies.',
+      {
+        query:    { type: 'string', description: 'Semantic or keyword query' },
+        category: { type: 'string', description: 'Optional category: Runbook, Architecture, Policy, Tutorial', enum: ['Runbook', 'Architecture', 'Policy', 'Tutorial'] }
+      },
+      ['query']
+    ),
+    execute: async (params): Promise<ToolResult> => {
+      const query    = str(params, 'query').trim();
+      const category = str(params, 'category') as KnowledgeCategory | undefined;
+
+      try {
+        const results = await ctx.storageEngine.searchKnowledge(query, category);
+        if (results.length === 0) return { success: true, output: 'No knowledge entries found matching that query.' };
+
+        const formatted = results.map(e => `[${e.id}] ${e.title} (${e.category})\nTags: ${e.tags.join(', ')}`).join('\n\n');
+        return { success: true, output: `Found ${results.length} entries:\n\n${formatted}` };
+      } catch (err) {
+        return { success: false, output: `KB Search failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  });
+
+  // ── getKnowledgeEntry ────────────────────────────────────────────────────
+  registry.set('getKnowledgeEntry', {
+    ollamaTool: makeTool(
+      'getKnowledgeEntry',
+      'Retrieve the full content of a specific knowledge entry by ID.',
+      {
+        id: { type: 'string', description: 'Knowledge entry ID (e.g. kb-arch-1234)' }
+      },
+      ['id']
+    ),
+    execute: async (params): Promise<ToolResult> => {
+      const id = str(params, 'id').trim();
+      const entry = await ctx.storageEngine.getKnowledgeEntry(id);
+      if (!entry) return { success: false, output: `Knowledge entry not found: ${id}` };
+
+      const content = entry.contentBlocks.join('\n\n');
+      return { success: true, output: `TITLE: ${entry.title}\nCATEGORY: ${entry.category}\n\n${content}\n\nRelated: ${entry.relatedEntries.join(', ') || 'None'}` };
+    },
+  });
+
+  // ── publishKnowledge ─────────────────────────────────────────────────────
+  registry.set('publishKnowledge', {
+    ollamaTool: makeTool(
+      'publishKnowledge',
+      'Document a successful fix, architectural insight, or runbook entry to the knowledge base.',
+      {
+        title:          { type: 'string', description: 'Clear title' },
+        category:       { type: 'string', description: 'Category', enum: ['Runbook', 'Architecture', 'Policy', 'Tutorial'] },
+        tags:           { type: 'string', description: 'Comma-separated tags' },
+        content_blocks: { type: 'string', description: 'Markdown content (separate paragraphs/bullets with double newlines)' }
+      },
+      ['title', 'category', 'content_blocks']
+    ),
+    execute: async (params): Promise<ToolResult> => {
+      const title    = str(params, 'title').trim();
+      const category = str(params, 'category') as KnowledgeCategory;
+      const tags     = str(params, 'tags').split(',').map(t => t.trim()).filter(Boolean);
+      const blocks   = str(params, 'content_blocks').split('\n\n').map(b => b.trim()).filter(Boolean);
+
+      try {
+        const entry = await ctx.storageEngine.publishKnowledge({ title, category, tags, contentBlocks: blocks, relatedEntries: [] });
+        return { success: true, output: `Knowledge entry published successfully: ${entry.id}` };
+      } catch (err) {
+        return { success: false, output: `KB Publish failed: ${err instanceof Error ? err.message : String(err)}` };
       }
     },
   });
