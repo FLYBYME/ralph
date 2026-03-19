@@ -8,96 +8,106 @@ Ralph is a proactive, state-driven AI automation agent designed to act as a co-m
 
 Ralph is built on a modular, event-driven architecture that separates high-level orchestration from low-level execution.
 
--   **DaemonOrchestrator**: The heartbeat of the system. It monitors the task queue, manages the FSM lifecycle, and triggers proactive maintenance when the system is idle.
--   **Finite State Machine (FSM)**: Manages tasks through distinct, verifiable steps (`INVESTIGATE`, `PLAN`, `WRITE_TESTS`, `EXECUTE`, `VERIFY`, `FINALIZE`).
--   **WorkerManager & Specialists**: A provider-agnostic layer that coordinates LLM calls (via Ollama, OpenAI, or Anthropic) and executes "specialist" roles (Researcher, Foreman, Judge).
--   **LedgerStorageEngine**: A file-based persistence layer that manages projects, tasks, settings, chat history, and the knowledge base with strict concurrency locking.
--   **LocalEventBus**: Facilitates decoupled communication across the system for logging, real-time streaming (SSE), and evaluation monitoring.
+### **1. Orchestration Layer**
+-   **DaemonOrchestrator**: The heartbeat of the system. It runs an infinite loop (default 1s tick) that monitors the `TaskQueue`. If the queue is empty, it tracks idle time to trigger the **Janitor Service**. It also manages the **Zombie Recovery Routine** to resume tasks interrupted by system crashes.
+-   **Finite State Machine (FSM)**: Every task follows a strict lifecycle. Each state has a dedicated `StepHandler` that validates the task's context before execution. Transitions are deterministic but can be overridden by specialists or manual human intervention.
+
+### **2. Intelligence Layer**
+-   **WorkerManager**: The central coordinator for LLM interactions. It implements a **ReAct loop** (Reasoning + Action), allowing specialists to call tools, observe results, and iterate until an objective is met.
+-   **Specialists**: Modular roles injected with specific system prompts:
+    -   **Researcher**: Dispatched during `INVESTIGATE` to map dependencies and root causes.
+    -   **Foreman**: Dispatched during `EXECUTE` to coordinate multiple sub-agents for complex refactors.
+    -   **Judge**: Dispatched during `EVALUATION` to grade performance based on a multi-point rubric.
+-   **PromptBuilder**: Dynamically assembles context (files, chat history, FSM state) into optimized LLM instructions.
+
+### **3. Infrastructure & Data**
+-   **LedgerStorageEngine**: A file-based "Source of Truth."
+    -   `ledger.json`: Global registry of projects, tasks summaries, and settings.
+    -   `/tasks/{id}.json`: Deep persistent memory for each task, including the full `StateContext` and message thread.
+    -   `knowledge.json`: The autonomous Knowledge Database.
+-   **LocalEventBus**: A decoupled pub/sub system. Every state transition, tool call, and specialist log is broadcasted as a structured event, powering the real-time SSE stream and the Evaluation Manager.
 
 ---
 
-## 🚀 Key Features
+## 🚀 Key Features: Deep Dive
 
-### 1. 💬 Interactive Conversational Experience
-Ralph provides a true back-and-forth chat experience for both specific tasks and broader project architecture.
--   **Memory Injection**: Automatically injects the last 10 turns of conversation into the LLM's context.
--   **FSM Firewall**: Strictly ignores messages with the `CHAT` intent to ensure discussions don't accidentally trigger state transitions or code modifications.
--   **SSE Streaming**: Real-time response streaming in the terminal for a more "alive" feel.
+### **💬 Interactive Conversational Experience**
+Ralph isn't just a command-line tool; he's a pair programmer.
+-   **Memory Injection**: When you enter `chat:start`, Ralph retrieves the last 10 messages from the task thread. These are mapped to `user` and `assistant` roles, providing context-aware continuity.
+-   **FSM Firewall**: The `ContextAnalyzer` intercepts every human message. If a message is tagged with the `CHAT` intent, the FSM is forbidden from transitioning to an actionable state (like `EXECUTE`), ensuring your "What if?" questions remain safe discussions.
 
-### 2. 📚 Knowledge Database (KD)
-Ralph manages a local, machine-optimized knowledge base (`knowledge.json`) to store runbooks, architectural patterns, and policies.
--   **Semantic Tooling**: Ralph can autonomously search the KB during investigation and update it upon successful task completion.
--   **Self-Learning**: If a task requires multiple retries, Ralph is instructed to document the solution as a "Runbook" entry to prevent future failures.
+### **📚 Knowledge Database (KD)**
+Ralph builds his own documentation.
+-   **Publishing**: Upon completing a complex task (especially those requiring retries), Ralph is instructed to call the `publishKnowledge` tool. This saves a structured JSON entry with categories (e.g., `Runbook`) and tags.
+-   **Autonomous Retrieval**: During the `INVESTIGATE` phase, Ralph semantically searches the KD. If he finds a relevant Runbook from a previous failure, he avoids the same mistakes, effectively "learning" over time.
 
-### 3. 🧹 Janitor/Reviewer Daemon
-Ralph shifts from reactive to proactive via the Janitor service.
--   **Idle Loop**: When no tasks are enqueued for a configurable period (default: 1 hour), Ralph enters "Proactive Mode."
--   **Audit Pipelines**:
-    -   **Dependency Audit**: Scans `package.json` for vulnerabilities and outdated packages.
-    -   **Code Smell Review**: Audits recent Git commits for missing types, debugging remnants, or refactoring needs.
--   **Autonomous Handoff**: Janitor findings are automatically converted into standard FSM tasks for verification and PR creation.
+### **🧹 Janitor/Reviewer Daemon**
+The Janitor service turns idle CPU time into project maintenance.
+-   **Trigger**: If the `consecutiveIdleTicks` exceeds the threshold (e.g., 1 hour), the Janitor wakes up.
+-   **Dependency Pipeline**: Scans for `package.json`, runs a simulated `npm audit`, and if gaps are found, enqueues an `AuditAction` task.
+-   **Code Smell Pipeline**: Uses the `GitRunner` to find recent changes and dispatches a specialist to review them for technical debt or security flaws.
 
-### 4. 🧪 Optional TDD Pipeline
-For complex logic changes or bug fixes, Ralph can engage a strict Test-Driven Development flow.
--   **Reproduction First**: Ralph must write a failing test that reproduces the bug before he is allowed to touch any implementation code.
--   **Verify Fail**: The system validates the test failure in a Docker sandbox. Only after a "Successful Failure" does he proceed to the `EXECUTE` phase.
+### **🧪 Optional TDD Pipeline**
+Engage "Hard Mode" for bug fixes using the `--tdd` flag.
+1.  **WRITE_TESTS**: Ralph is restricted to test files. He must write a test that fails due to the reported bug.
+2.  **VERIFY_FAIL**: The system runs the test suite via Docker. If the test *passes*, the FSM loops back—Ralph must prove the bug exists before he can fix it.
+3.  **EXECUTE**: Only once a failing test is confirmed does Ralph receive permission to modify the source code.
 
-### 5. 📉 Asynchronous Evaluation Framework
-A built-in CI/CD pipeline for the AI itself.
--   **Eval Scenarios**: Pre-configured test cases (e.g., `tdd-auth-bypass`) that challenge Ralph's reasoning and execution.
--   **LLM-as-a-Judge**: A specialist "Judge" model automatically grades the final output on quality, correctness, and adherence to TDD principles.
--   **Sandbox Isolation**: All evaluations run in ephemeral workspaces with flagged project records to prevent main-branch pollution.
+### **📉 Asynchronous Evaluation Framework**
+A dedicated CI/CD suite for AI performance.
+-   **Sandbox Generation**: When an eval starts, the system creates a `/tmp/ralph-evals/` workspace and copies the target template codebase.
+-   **Event-Driven Grading**: The `EvalManager` tracks the task's FSM path. Once finished, it triggers a final Docker verification and dispatches an independent LLM "Judge" to generate a scorecard (Pass/Fail, Code Quality, TDD Adherence).
 
 ---
 
-## 💻 CLI Usage
+## 💻 CLI Command Reference
 
-Ralph's terminal interface supports standard commands and interactive modes.
-
-### Task Management
--   `ralph solve "Fix the JWT bug" --tdd`: Start a solving task with TDD enabled.
--   `ralph list`: View the current task backlog.
--   `ralph logs <taskId>`: Stream the "thought process" and tool output for a task.
-
-### Interactive Chat
--   `ralph chat:start <taskId>`: Drop into a real-time REPL for a specific task.
--   `ralph chat:project <projectId>`: Discuss project architecture and logic.
-
-### Knowledge Base
--   `ralph kb:search "quota limits"`: Search the KB.
--   `ralph kb:read <entryId>`: Read a specific knowledge entry.
--   `ralph kb:request <projectId> "How does the bus work?"`: Ask Ralph to research and document a concept.
-
-### Evaluation & System
--   `ralph eval:run <scenarioId>`: Trigger an AI performance test.
--   `ralph eval:status <evalId>`: View the scorecard and judge's feedback.
--   `ralph janitor:run`: Manually trigger a proactive audit.
--   `ralph config`: View or update system settings (e.g., active model, janitor interval).
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `solve` | Create a new solving task | `ralph solve "Refactor auth" --tdd` |
+| `chat:start` | Start task-level REPL | `ralph chat:start <taskId>` |
+| `chat:project` | Discuss project architecture | `ralph chat:project <projectId>` |
+| `kb:search` | Search knowledge base | `ralph kb:search "middleware"` |
+| `kb:request` | Ask Ralph to document a concept | `ralph kb:request p1 "How is logging handled?"` |
+| `eval:run` | Run an evaluation scenario | `ralph eval:run tdd-auth-bypass` |
+| `janitor:run` | Manual maintenance audit | `ralph janitor:run` |
+| `stream` | Real-time global event monitor | `ralph stream --backlog` |
+| `config` | View/Edit settings | `ralph config model gpt-4o` |
 
 ---
 
 ## 🛠 Technical Stack
 
--   **Runtime**: Node.js (ESM)
--   **Language**: TypeScript
--   **LLM Engine**: Ollama (Native Tool Calling), OpenAI, Anthropic
--   **Isolation**: Docker (via Dockerode) for CI/CD and verification.
--   **API**: Express with Server-Sent Events (SSE).
--   **Styling**: Chalk for a rich terminal experience.
+-   **LLM Provider**: Ollama (Native Tool Calling), OpenAI, Anthropic.
+-   **Containerization**: Docker (via Dockerode) for isolated CI/CD.
+-   **Server**: Express.js with SSE for event streaming.
+-   **Terminal**: Commander.js + Chalk for a rich interactive CLI.
+-   **Safety**: Strict file-locking (`withLock`) to prevent ledger corruption.
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Setup & Development
 
-Ralph uses a `.env` file for core connectivity and `ledger.json` for runtime settings.
+### **1. Prerequisites**
+-   Node.js v20+
+-   Ollama (running locally)
+-   Docker (for `VERIFY` and `EVAL` phases)
 
-```env
-PORT=3000
-OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=qwen3:4b-instruct
-ACTIVE_LLM_PROVIDER=ollama-local
-JANITOR_ENABLED=true
-TDD_MODE_ENABLED=false
+### **2. Installation**
+```bash
+git clone https://github.com/FLYBYME/ralph.git
+cd ralph
+npm install
+cp .env.example .env
+```
+
+### **3. Start the Daemon**
+```bash
+# Terminal 1: Start the API & Orchestrator
+npm run dev
+
+# Terminal 2: Interact via CLI
+ralph help
 ```
 
 ---
