@@ -90,13 +90,15 @@ export const taskApproveCommand: CommandDefinition = {
   aliases: ['approve'],
   category: 'task',
   args: [
-    { name: 'taskId', description: 'Task ID or prefix', required: true }
+    { name: 'taskId', description: 'Task ID or prefix', required: true },
+    { name: 'message', description: 'Optional approval message', required: false }
   ],
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const taskId = ctx.args['taskId'];
+    const message = ctx.args['message'] || 'Looks good, proceed.';
     if (!taskId) return { success: false, message: 'Task ID required' };
     
-    await ctx.client.appendMessage(taskId, 'Looks good, proceed.', 'APPROVAL');
+    await ctx.client.appendMessage(taskId, message, 'APPROVAL');
     return {
       success: true,
       message: `Task ${taskId} approved via API.`
@@ -221,11 +223,13 @@ export const taskRejectCommand: CommandDefinition = {
   aliases: ['reject'],
   category: 'task',
   args: [
-    { name: 'taskId', description: 'Task ID or prefix', required: true }
+    { name: 'taskId', description: 'Task ID or prefix', required: true },
+    { name: 'message', description: 'Optional reason for rejection', required: false }
   ],
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const taskId = ctx.args['taskId']!;
-    await ctx.client.appendMessage(taskId, 'Rejected by admin. Please rethink and investigation again.', 'REJECT');
+    const message = ctx.args['message'] || 'Rejected by admin. Please rethink and investigation again.';
+    await ctx.client.appendMessage(taskId, message, 'REJECT');
     return { success: true, message: `Task ${taskId} rejected. Ralph is refocusing.` };
   }
 };
@@ -233,14 +237,16 @@ export const taskRejectCommand: CommandDefinition = {
 export const taskFinalizeCommand: CommandDefinition = {
   name: 'task:finalize',
   description: 'Approve a task and trigger final commit/push/PR',
-  aliases: ['finalize', 'publish'],
+  aliases: ['finalize', 'publish', 'commit'],
   category: 'task',
   args: [
-    { name: 'taskId', description: 'Task ID or prefix', required: true }
+    { name: 'taskId', description: 'Task ID or prefix', required: true },
+    { name: 'message', description: 'Optional final approval message', required: false }
   ],
   execute: async (ctx: CommandContext): Promise<CommandResult> => {
     const taskId = ctx.args['taskId']!;
-    await ctx.client.appendMessage(taskId, 'Approved. Please finalize and push.', 'APPROVAL');
+    const message = ctx.args['message'] || 'Approved. Please finalize and push.';
+    await ctx.client.appendMessage(taskId, message, 'APPROVAL');
     return { success: true, message: `Finalization requested for task ${taskId}. Watch logs for PR creation.` };
   }
 };

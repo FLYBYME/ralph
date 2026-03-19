@@ -6,6 +6,7 @@ import { PlanHandler } from './handlers/PlanHandler.js';
 import { ExecuteHandler } from './handlers/ExecuteHandler.js';
 import { VerifyHandler } from './handlers/VerifyHandler.js';
 import { ReviewHandler } from './handlers/ReviewHandler.js';
+import { SelfReviewHandler } from './handlers/SelfReviewHandler.js';
 import { WorkerManager } from '../llm/WorkerManager.js';
 import { ProviderRegistry } from '../llm/ProviderRegistry.js';
 import { PromptBuilder } from '../llm/PromptBuilder.js';
@@ -35,6 +36,7 @@ export class FiniteStateMachine {
     this.handlers.set(FsmStep.PLAN, new PlanHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
     this.handlers.set(FsmStep.EXECUTE, new ExecuteHandler(workerManager, providerRegistry, promptBuilder, diskTooling, specialistExecutor));
     this.handlers.set(FsmStep.VERIFY, new VerifyHandler(workerManager, providerRegistry, promptBuilder, diskTooling));
+    this.handlers.set(FsmStep.SELF_REVIEW, new SelfReviewHandler(workerManager, providerRegistry, promptBuilder, remoteProvider));
     this.handlers.set(FsmStep.AWAITING_REVIEW, new ReviewHandler());
     this.handlers.set(FsmStep.FINALIZE, new FinalizeHandler(remoteProvider));
   }
@@ -122,6 +124,7 @@ export class FiniteStateMachine {
       FsmStep.PLAN,
       FsmStep.EXECUTE,
       FsmStep.VERIFY,
+      FsmStep.SELF_REVIEW,
       FsmStep.AWAITING_REVIEW,
       FsmStep.FINALIZE
     ];

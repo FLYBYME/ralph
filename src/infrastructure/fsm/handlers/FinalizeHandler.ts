@@ -41,8 +41,10 @@ export class FinalizeHandler implements IStepHandler {
         
         await git.gitAdd(targetFiles);
 
-        // 3. Commit with a structured message
-        const commitMsg = `Ralph: ${task.objective.title} (Task: ${task.id})`;
+        // 3. Commit with a structured message (Prefer self-review generated message)
+        const commitMsg = (task.context.review && task.context.review.proposedCommitMessage) 
+            ? task.context.review.proposedCommitMessage 
+            : `Ralph: ${task.objective.title} (Task: ${task.id})`;
         const commitResult = await git.gitCommit(commitMsg);
 
         // 4. Push to remote origin

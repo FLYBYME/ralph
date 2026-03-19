@@ -24,7 +24,19 @@ export interface ActionableStep {
   description: string;
 }
 
+export interface SubTask {
+  id: string;
+  worker: string;
+  instructions: string;
+  targetFiles: string[];
+  dependsOn: string[];
+  status?: 'OPEN' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+  result?: string;
+}
+
 export interface PlanningContext {
+  rootCauseAnalysis: string;
+  subTasks: SubTask[];
   proposedSteps: ActionableStep[];
   targetFiles: string[];
   requiredTools: string[];

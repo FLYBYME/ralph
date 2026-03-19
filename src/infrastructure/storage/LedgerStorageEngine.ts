@@ -250,7 +250,7 @@ export class LedgerStorageEngine {
       context: {
         currentStep: FsmStep.INVESTIGATE,
         investigation: { discoveredFiles: [], searchQueriesRun: [], architecturalSummary: '', notes: '' },
-        planning: { proposedSteps: [], targetFiles: [], requiredTools: [], planSummary: '' },
+        planning: { rootCauseAnalysis: '', subTasks: [], proposedSteps: [], targetFiles: [], requiredTools: [], planSummary: '' },
         execution: { activeWorkerId: '', attemptCount: 0, lastErrorLog: null, geminiPrompt: '', selectedWorker: 'gemini' },
         verification: { commandsRun: [], testOutput: '', lintPassed: false },
         review: { selfReviewNotes: '', proposedCommitMessage: '', diffSummary: '' },
